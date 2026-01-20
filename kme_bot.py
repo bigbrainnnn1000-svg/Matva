@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-TOKEN = "8542959870:AAGVHKPR5dyy231prW4uK7pwK9L0Ej-fAKw"
+# ТОКЕН (ЗАМЕНИЛ НА НОВЫЙ, СТАРЫЙ БЫЛ СКОМПРОМЕТИРОВАН)
+TOKEN = "8542959870:AAFaEvHTCmnE2yToaxO0f0vzoExRI-F_prY"
 ADMIN_USERNAME = "@Matvatok"
 FARM_COOLDOWN = 4
 
@@ -105,14 +106,14 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.save_data()
     
     text = f"""
-Добро пожаловать в KMEbot!
+🎮 Добро пожаловать в KMEbot! 🎮
 
-Игрок: {user.first_name}
-Баланс: {user_data['coins']} KMEкоинов
-Фармов: {user_data['farm_count']}
-Всего заработано: {user_data['total_farmed']}
+👤 Игрок: {user.first_name}
+💰 Баланс: {user_data['coins']} KMEкоинов
+📊 Фармов: {user_data['farm_count']}
+🏆 Всего заработано: {user_data['total_farmed']}
 
-Команды:
+📋 Основные команды:
 /farm - получить коины (раз в {FARM_COOLDOWN} часа)
 /balance - проверить баланс
 /top - топ игроков (5 лучших)
@@ -120,8 +121,15 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /inventory - ваши покупки
 /help - помощь
 
-Фарм раз в {FARM_COOLDOWN} часа!
-За фарм: 1-5 KMEкоинов + шанс бонуса (5%)
+🎲 НОВАЯ СИСТЕМА ФАРМА:
+• Базово: 1-5 коинов
+• 🎉 УДАЧА (+2 коина): 10%
+• 😕 НЕУДАЧА (-1 или -2 коина): 8%
+• 👍 Старый бонус (+1): 2%
+
+💬 РАБОТА В ЧАТАХ:
+• В группе пишите: /farm@имябота
+• Или просто /farm (если бот администратор)
     """
     await update.message.reply_text(text)
 
@@ -135,25 +143,45 @@ async def farm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg)
         return
     
+    # Базовое количество коинов
     coins = random.randint(1, 5)
+    bonus_msg = ""
+    emoji = "💰"
     
-    if random.random() < 0.05:
+    # НОВЫЕ ШАНСЫ:
+    chance = random.random()  # число от 0 до 1
+    
+    if chance < 0.10:  # 10% шанс на +2 коина
+        bonus = 2
+        coins += bonus
+        bonus_msg = f"\n🎉 УДАЧА! +{bonus} дополнительных коина!"
+        emoji = "🎉"
+    elif chance < 0.18:  # 8% шанс на штраф (10% + 8% = 18%)
+        penalty = random.choice([-1, -2])
+        original_coins = coins
+        coins = max(0, coins + penalty)  # Не уходим в минус
+        if penalty == -1:
+            bonus_msg = f"\n😕 НЕУДАЧА... -1 коин ({original_coins} → {coins})"
+            emoji = "😕"
+        else:
+            bonus_msg = f"\n😞 ПЕЧАЛЬ... -2 коина ({original_coins} → {coins})"
+            emoji = "😞"
+    elif chance < 0.20:  # 2% шанс на +1 коин (старый бонус)
         bonus = 1
         coins += bonus
-        bonus_msg = f"\nБОНУС! +{bonus} коин!"
-    else:
-        bonus_msg = ""
+        bonus_msg = f"\n👍 БОНУС! +{bonus} коин!"
+        emoji = "👍"
     
     new_balance = db.add_coins(user_id, coins)
     
     result = f"""
-Фарм успешен!
+{emoji} Фарм завершен! {emoji}
 
 Получено: {coins} KMEкоинов{bonus_msg}
-Новый баланс: {new_balance} KMEкоинов
-Всего заработано: {db.get_user(user_id)['total_farmed']}
+💰 Новый баланс: {new_balance} KMEкоинов
+🏆 Всего заработано: {db.get_user(user_id)['total_farmed']}
 
-Следующий фарм через {FARM_COOLDOWN} часа!
+⏳ Следующий фарм через {FARM_COOLDOWN} часа!
     """
     await update.message.reply_text(result)
 
@@ -172,19 +200,19 @@ async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             wait = next_farm - now
             hours = int(wait.total_seconds() // 3600)
             minutes = int((wait.total_seconds() % 3600) // 60)
-            timer = f"До фарма: {hours}ч {minutes}м\n"
+            timer = f"⏳ До фарма: {hours}ч {minutes}м\n"
         else:
-            timer = "Можно фармить! /farm\n"
+            timer = "✅ Можно фармить! /farm\n"
     else:
-        timer = "Можно фармить! /farm\n"
+        timer = "✅ Можно фармить! /farm\n"
     
     text = f"""
-Игрок: {user.first_name}
-KMEкоинов: {user_data['coins']}
-Фармов: {user_data['farm_count']}
-Всего заработано: {user_data['total_farmed']}
+👤 Игрок: {user.first_name}
+💰 KMEкоинов: {user_data['coins']}
+📊 Фармов: {user_data['farm_count']}
+🏆 Всего заработано: {user_data['total_farmed']}
 
-{timer}Используйте /shop для покупки
+{timer}🛍️ Используйте /shop для покупки
     """
     await update.message.reply_text(text)
 
@@ -199,7 +227,7 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reverse=True
     )[:5]
     
-    text = "ТОП 5 ИГРОКОВ KMEbot\n\n"
+    text = "🏆 ТОП 5 ИГРОКОВ KMEbot 🏆\n\n"
     
     for i, (user_id, user_data) in enumerate(top_users, 1):
         username = user_data.get('username', f'Игрок{user_id[-4:]}')
@@ -207,7 +235,8 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             username = f"@{username}" if username else f"Игрок{user_id[-4:]}"
         
         coins = user_data.get('total_farmed', 0)
-        text += f"{i}. {username}: {coins} коинов\n"
+        medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i-1]
+        text += f"{medal} {username}: {coins} коинов\n"
     
     await update.message.reply_text(text)
 
@@ -215,17 +244,17 @@ async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_data = db.get_user(user.id)
     
-    text = "МАГАЗИН KMEbot\n\n"
+    text = "🛍️ МАГАЗИН KMEbot 🛍️\n\n"
     
     for item_id, item in SHOP_ITEMS.items():
-        text += f"{item_id}. {item['name']}\n"
-        text += f"   Цена: {item['price']} KMEкоинов\n"
-        text += f"   {item['description']}\n"
-        text += f"   Команда: /buy_{item_id}\n\n"
+        text += f"🔸 {item_id}. {item['name']}\n"
+        text += f"   💰 Цена: {item['price']} KMEкоинов\n"
+        text += f"   📝 {item['description']}\n"
+        text += f"   🛒 Команда: /buy_{item_id}\n\n"
     
-    text += f"Ваш баланс: {user_data['coins']} KMEкоинов\n"
-    text += f"Для покупки напишите /buy_номер\n"
-    text += f"Пример: /buy_1"
+    text += f"💰 Ваш баланс: {user_data['coins']} KMEкоинов\n"
+    text += f"🛒 Для покупки напишите /buy_номер\n"
+    text += f"📝 Пример: /buy_1"
     
     await update.message.reply_text(text)
 
@@ -237,10 +266,10 @@ async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         item_id = int(command.split('_')[1])
     except:
         await update.message.reply_text(
-            "Неправильный формат!\n"
-            "Используйте: /buy_номер\n"
-            "Пример: /buy_1\n"
-            "Посмотреть товары: /shop"
+            "❌ Неправильный формат!\n"
+            "✅ Используйте: /buy_номер\n"
+            "📝 Пример: /buy_1\n"
+            "🛍️ Посмотреть товары: /shop"
         )
         return
     
@@ -248,7 +277,9 @@ async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if success:
         user_data = db.get_user(user.id)
-        message += f"\nОстаток: {user_data['coins']} KMEкоинов"
+        message = f"✅ {message}\n💰 Остаток: {user_data['coins']} KMEкоинов"
+    else:
+        message = f"❌ {message}"
     
     await update.message.reply_text(message)
 
@@ -257,25 +288,25 @@ async def inventory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = db.get_user(user.id)
     
     if not user_data['inventory']:
-        text = "Ваш инвентарь пуст\nЗагляните в магазин: /shop"
+        text = "📦 Ваш инвентарь пуст\n🛍️ Загляните в магазин: /shop"
     else:
-        text = "ВАШ ИНВЕНТАРЬ\n\n"
+        text = "📦 ВАШ ИНВЕНТАРЬ 📦\n\n"
         
         for i, item in enumerate(user_data['inventory'], 1):
             bought_date = datetime.fromisoformat(item['bought_at']).strftime("%d.%m.%Y %H:%M")
-            text += f"{i}. {item['name']}\n"
-            text += f"   Куплено за: {item['price']} коинов\n"
-            text += f"   Дата: {bought_date}\n\n"
+            text += f"📦 {i}. {item['name']}\n"
+            text += f"   💰 Куплено за: {item['price']} коинов\n"
+            text += f"   📅 Дата: {bought_date}\n\n"
         
-        text += f"Всего покупок: {len(user_data['inventory'])}"
+        text += f"📊 Всего покупок: {len(user_data['inventory'])}"
     
     await update.message.reply_text(text)
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = f"""
-ПОМОЩЬ ПО KMEbot
+🆘 ПОМОЩЬ ПО KMEbot 🆘
 
-Основные команды:
+📋 Основные команды:
 /farm - получить коины (раз в {FARM_COOLDOWN} часа)
 /balance - ваш баланс и статистика
 /top - топ 5 игроков
@@ -283,41 +314,70 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /inventory - ваши покупки
 /help - эта справка
 
-Товары в магазине:
-1. Модер в чате - 150 коинов
-2. Модер на твиче - 200 коинов  
-3. Dota+ - 300 коинов
+🛍️ Товары в магазине:
+1. 🛡️ Модер в чате - 150 коинов
+2. 🎮 Модер на твиче - 200 коинов  
+3. ⚔️ Dota+ - 300 коинов
 
-Как покупать:
+🛒 Как покупать:
 /buy_1 - купить модера в чате
 /buy_2 - купить модера на твиче
 /buy_3 - купить Dota+
 
-Правила:
-• Фарм раз в {FARM_COOLDOWN} часа
-• За фарм дается 1-5 коинов
-• Шанс бонуса: 5%
-• Все данные сохраняются
+🎲 НОВАЯ СИСТЕМА ФАРМА:
+• Базово: 1-5 коинов
+• 🎉 УДАЧА (+2 коина): 10% шанс
+• 😕 НЕУДАЧА (-1 или -2 коина): 8% шанс
+• 👍 Старый бонус (+1): 2% шанс
 
-Создатель: {ADMIN_USERNAME}
-Проблемы/предложения: пишите {ADMIN_USERNAME}
+💬 РАБОТА В ЧАТАХ:
+• В группе пишите: /farm@имябота
+• Или просто /farm (если бот администратор)
+• Бот автоматически отвечает на упоминания
+
+📊 Статистика:
+• Все данные сохраняются
+• Топ игроков обновляется в реальном времени
+• Инвентарь хранится постоянно
+
+👤 Создатель: {ADMIN_USERNAME}
+❓ Проблемы/предложения: пишите {ADMIN_USERNAME}
     """
     await update.message.reply_text(text)
 
+# Обработчик для сообщений в чатах
+async def handle_mention(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message and update.message.text:
+        # Проверяем, упомянут ли бот
+        if context.bot.username and f"@{context.bot.username}" in update.message.text:
+            await update.message.reply_text(
+                f"👋 Да, я здесь, {update.effective_user.first_name}!\n"
+                f"💬 Используйте команды:\n"
+                f"💰 /farm - получить коины\n"
+                f"📊 /balance - ваш баланс\n"
+                f"🛍️ /shop - магазин"
+            )
+
 def main():
     print("=" * 50)
-    print("ЗАПУСК KMEbot")
+    print("🚀 ЗАПУСК KMEbot v2.0 (ОБНОВЛЁННЫЙ)")
     print("=" * 50)
-    print(f"Загружено игроков: {len(db.data)}")
-    print(f"КД фарма: {FARM_COOLDOWN} часа")
-    print(f"Коинов за фарм: 1-5 + 5% бонус")
-    print(f"Товаров в магазине: {len(SHOP_ITEMS)}")
+    print(f"👥 Загружено игроков: {len(db.data)}")
+    print(f"⏳ КД фарма: {FARM_COOLDOWN} часа")
+    print(f"💰 Коинов за фарм: 1-5")
+    print(f"🎉 Шанс +2: 10% | 😕 Шанс -1/-2: 8%")
+    print(f"🛍️ Товаров в магазине: {len(SHOP_ITEMS)}")
     print("=" * 50)
     
     try:
-        app = Application.builder().token(TOKEN).build()
+        # Важное изменение для работы в группах:
+        app = Application.builder()\
+            .token(TOKEN)\
+            .get_updates_read_timeout(30)\
+            .pool_timeout(30)\
+            .build()
         
-        # ТОЛЬКО АНГЛИЙСКИЕ КОМАНДЫ
+        # Команды (работают и в ЛС, и в группах)
         app.add_handler(CommandHandler("start", start_cmd))
         app.add_handler(CommandHandler("farm", farm_cmd))
         app.add_handler(CommandHandler("balance", balance_cmd))
@@ -326,18 +386,26 @@ def main():
         app.add_handler(CommandHandler("inventory", inventory_cmd))
         app.add_handler(CommandHandler("help", help_cmd))
         
+        # Команды покупки
         app.add_handler(CommandHandler("buy_1", buy_cmd))
         app.add_handler(CommandHandler("buy_2", buy_cmd))
         app.add_handler(CommandHandler("buy_3", buy_cmd))
         
-        print("KMEbot запущен!")
-        print("Для остановки нажмите Ctrl+C")
+        # Обработчик упоминаний в чатах (для реакции на @имябота)
+        app.add_handler(MessageHandler(
+            filters.TEXT & filters.Entity("mention"),
+            handle_mention
+        ))
+        
+        print("✅ KMEbot запущен!")
+        print("📱 Бот работает в ЛС и чатах")
+        print("🔧 Для остановки нажмите Ctrl+C")
         print("=" * 50)
         
-        app.run_polling()
+        app.run_polling(allowed_updates=Update.ALL_TYPES)
         
     except Exception as e:
-        print(f"ОШИБКА: {e}")
+        print(f"❌ ОШИБКА: {e}")
         import traceback
         traceback.print_exc()
         input("Нажми Enter для выхода...")
