@@ -1,4 +1,3 @@
-
 import json
 import os
 import random
@@ -237,7 +236,309 @@ db = Database()
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
-# ========== КОМАНДА /PARTY (0-13000) ==========
+# ========== КОМАНДА /GIVE (РАБОТАЕТ ПРИ ОТВЕТЕ НА СООБЩЕНИЕ) ==========
+async def give_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Только для админа!")
+        return
+    
+    # ПРОВЕРКА: Должен быть ответ на сообщение
+    if not update.message.reply_to_message:
+        await update.message.reply_text(
+            "❌ Нужно ответить на сообщение игрока!\n\n"
+            "✅ КАК ВЫДАТЬ КОИНЫ:\n"
+            "1. Найди сообщение игрока в чате\n"
+            "2. Ответь на него (Reply)\n"
+            "3. Напиши: /give 100\n\n"
+            "Пример:\n"
+            "Игрок: 'Привет!'\n"
+            "Ты: (ответить) /give 50\n\n"
+            "💰 Бот автоматически найдёт игрока и выдаст коины!"
+        )
+        return
+    
+    # ПРОВЕРКА: Должно быть количество коинов
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Укажите количество коинов!\n"
+            "✅ Формат: /give 100\n"
+            "✅ Пример: /give 50"
+        )
+        return
+    
+    try:
+        amount = int(context.args[0])
+        if amount <= 0:
+            await update.message.reply_text("❌ Количество должно быть больше 0!")
+            return
+        if amount > 10000:
+            await update.message.reply_text("❌ Максимум 10,000 коинов за раз!")
+            return
+    except:
+        await update.message.reply_text("❌ Неправильное количество! Введите число.")
+        return
+    
+    # ПОЛУЧАЕМ ИГРОКА ИЗ СООБЩЕНИЯ
+    target_user = update.message.reply_to_message.from_user
+    target_user_id = str(target_user.id)
+    
+    # СОХРАНЯЕМ ИГРОКА В БАЗЕ (если его нет)
+    target_data = db.get_user(target_user_id)
+    
+    # Сохраняем данные игрока
+    if target_user.username and not target_data.get('username'):
+        target_data['username'] = target_user.username
+    if target_user.full_name and not target_data.get('display_name'):
+        target_data['display_name'] = target_user.full_name
+    db.save_data()
+    
+    # ВЫДАЁМ КОИНЫ
+    old_total = target_data['total_farmed']
+    new_balance = db.add_coins(target_user_id, amount, from_farm=False, from_admin=True)
+    
+    # Формируем имя для отображения
+    if target_user.username:
+        target_name = f"@{target_user.username}"
+    else:
+        target_name = target_user.first_name
+    
+    # Проверяем повышение уровня
+    old_level = get_user_level(old_total)
+    new_level = get_user_level(new_balance)
+    level_up_msg = ""
+    if old_level['level'] < new_level['level']:
+        level_up_msg = f"\n🎊 Уровень повышен: {old_level['name']} → {new_level['name']}!"
+    
+    # ОТВЕТ АДМИНУ
+    result_admin = (
+        f"✅ ВЫДАНО {amount} КОИНОВ!\n\n"
+        f"👤 Игрок: {target_name}\n"
+        f"💰 Баланс: {new_balance} коинов\n"
+        f"🏆 Всего заработано: {old_total + amount}"
+        f"{level_up_msg}"
+    )
+    
+    # УВЕДОМЛЕНИЕ ИГРОКУ (в ЛС)
+    try:
+        await context.bot.send_message(
+            chat_id=target_user_id,
+            text=(
+                f"🎉 АДМИН ВЫДАЛ ВАМ КОИНЫ!\n\n"
+                f"💰 +{amount} KMEкоинов\n"
+                f"🏦 Ваш баланс: {new_balance}\n"
+                f"📊 Уровень: {new_level['name']}"
+                f"{level_up_msg}\n\n"
+                f"💬 Используйте:\n"
+                f"• /farm - фармить коины\n"
+                f"• /level - информация об уровне\n"
+                f"• /shop - магазин\n"
+                f"• /balance - проверить баланс"
+            )
+        )
+        result_admin += "\n\n📨 Игрок получил уведомление в ЛС!"
+    except:
+        result_admin += "\n\n⚠️ Не удалось отправить уведомление игроку"
+    
+    await update.message.reply_text(result_admin)
+
+# ========== КОМАНДА /BALANCE ДЛЯ ДРУГОГО ИГРОКА (ОТВЕТ НА СООБЩЕНИЕ) ==========
+async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Если есть ответ на сообщение и отправитель - админ
+    if update.message.reply_to_message and is_admin(update.effective_user.id):
+        target_user = update.message.reply_to_message.from_user
+        user_id = str(target_user.id)
+        user_name = f"@{target_user.username}" if target_user.username else target_user.first_name
+    else:
+        target_user = update.effective_user
+        user_id = str(target_user.id)
+        user_name = target_user.first_name
+    
+    user_data = db.get_user(user_id)
+    
+    total_coins = user_data['total_farmed']
+    current_level, next_level, progress, coins_needed = get_level_progress(total_coins)
+    
+    farm_timer = ""
+    if user_data['last_farm']:
+        last = datetime.fromisoformat(user_data['last_farm'])
+        now = datetime.now()
+        cooldown = timedelta(hours=FARM_COOLDOWN)
+        if now - last < cooldown:
+            next_farm = last + cooldown
+            wait = next_farm - now
+            hours = int(wait.total_seconds() // 3600)
+            minutes = int((wait.total_seconds() % 3600) // 60)
+            farm_timer = f"⏳ До фарма: {hours:02d}:{minutes:02d}\n"
+        else:
+            farm_timer = "✅ Можно фармить! /farm\n"
+    else:
+        farm_timer = "✅ Можно фармить! /farm\n"
+    
+    text = f"""
+👤 Игрок: {user_name}
+💰 Текущие коины: {user_data['coins']}
+🏆 Всего заработано: {total_coins}
+📊 Уровень: {current_level['name']} ({progress}%)
+
+🎯 Статистика:
+📈 Фармов: {user_data['farm_count']}
+✅ Успешных краж: {user_data['steal_success']}
+❌ Провалов: {user_data['steal_failed']}
+💰 Украдено: {user_data['stolen_total']}
+💸 Потеряно: {user_data['lost_total']}
+
+{farm_timer}
+📈 Подробнее об уровне: /level
+"""
+    
+    await update.message.reply_text(text)
+
+# ========== КОМАНДА /LEVEL ДЛЯ ДРУГОГО ИГРОКА (ОТВЕТ НА СООБЩЕНИЕ) ==========
+async def level_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать уровень игрока (можно для себя или для другого при ответе)"""
+    # Если есть ответ на сообщение и отправитель - админ
+    if update.message.reply_to_message and is_admin(update.effective_user.id):
+        target_user = update.message.reply_to_message.from_user
+        user_id = str(target_user.id)
+        user_name = f"@{target_user.username}" if target_user.username else target_user.first_name
+    else:
+        target_user = update.effective_user
+        user_id = str(target_user.id)
+        user_name = target_user.first_name
+    
+    user_data = db.get_user(user_id)
+    
+    total_coins = user_data['total_farmed']
+    current_level, next_level, progress, coins_needed = get_level_progress(total_coins)
+    
+    avg_farm = 2.5
+    farms_needed = max(1, int(coins_needed / avg_farm)) if coins_needed > 0 else 0
+    
+    text = f"""
+📊 УРОВЕНЬ ИГРОКА
+
+👤 Игрок: {user_name}
+💰 Всего заработано: {total_coins} коинов
+🏆 Уровень: {current_level['name']}
+📈 Прогресс: {progress}%
+📊 Фармов: {user_data['farm_count']}
+"""
+    
+    if next_level:
+        text += f"""
+🎯 ДО СЛЕДУЮЩЕГО УРОВНЯ:
+{next_level['name']}
+💰 Нужно коинов: {coins_needed}
+🔄 Примерно фармов: {farms_needed}
+⏰ При {FARM_COOLDOWN}ч КД: ~{farms_needed * FARM_COOLDOWN} часов
+"""
+    else:
+        text += """
+🎉 ВЫ ДОСТИГЛИ МАКСИМАЛЬНОГО УРОВНЯ!
+🔥 Теперь вы Божество KMEbot!
+"""
+    
+    text += "\n📋 СИСТЕМА УРОВНЕЙ:\n"
+    for level in LEVELS:
+        arrow = "➡️" if level["level"] == current_level["level"] else "  "
+        text += f"{arrow} {level['name']}: {level['min_coins']}-{level['max_coins'] if level['max_coins'] < 1000000 else '∞'} коинов\n"
+    
+    await update.message.reply_text(text)
+
+# ========== КОМАНДА /FARM (ТОЛЬКО ДЛЯ СЕБЯ) ==========
+async def farm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = str(user.id)
+    
+    can_farm, msg = db.can_farm(user_id)
+    
+    if not can_farm:
+        await update.message.reply_text(msg)
+        return
+    
+    coins = random.randint(0, 5)
+    bonus_msg = ""
+    emoji = "💰"
+    
+    chance = random.random()
+    
+    # 10% шанс на минус коин (увеличено)
+    if chance < 0.10:
+        bonus = 2
+        coins += bonus
+        bonus_msg = f"\n🎉 УДАЧА! +{bonus} коина!"
+        emoji = "🎉"
+    elif chance < 0.20:
+        penalty = random.choice([-1, -2])
+        original_coins = coins
+        coins = max(0, coins + penalty)
+        if penalty == -1:
+            bonus_msg = f"\n😕 Неудача... -1 коин ({original_coins} → {coins})"
+            emoji = "😕"
+        else:
+            bonus_msg = f"\n😞 Печаль... -2 коина ({original_coins} → {coins})"
+            emoji = "😞"
+    
+    old_balance = db.get_user(user_id)['total_farmed']
+    new_balance = db.add_coins(user_id, coins)
+    
+    old_level = get_user_level(old_balance)
+    new_level = get_user_level(new_balance)
+    
+    level_up_msg = ""
+    if old_level['level'] < new_level['level']:
+        level_up_msg = f"\n\n🎊 УРОВЕНЬ ПОВЫШЕН! Теперь ты {new_level['name']}!"
+    
+    result = f"""
+{emoji} Фарм завершен!
+
+Получено: {coins} коинов{bonus_msg}
+💰 Баланс: {db.get_user(user_id)['coins']}
+🏆 Всего: {new_balance}
+📊 Уровень: {new_level['name']}{level_up_msg}
+
+⏳ Следующий через {FARM_COOLDOWN}ч
+"""
+    
+    if coins == 0:
+        result += "\n💡 Не расстраивайся! Пиши /level чтобы увидеть прогресс!"
+    
+    await update.message.reply_text(result)
+
+# ========== КОМАНДА /TOP (РАБОТАЕТ БЕЗ ОТВЕТА) ==========
+async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not db.data:
+        await update.message.reply_text("📭 Пока нет игроков!")
+        return
+    
+    top_users = sorted(
+        db.data.items(),
+        key=lambda x: x[1]['total_farmed'],
+        reverse=True
+    )[:5]
+    
+    text = "🏆 ТОП 5 ИГРОКОВ ПО УРОВНЮ 🏆\n\n"
+    
+    for i, (user_id, user_data) in enumerate(top_users, 1):
+        username = user_data.get('username', '')
+        if username:
+            name = f"@{username}"
+        else:
+            name = user_data.get('display_name', f"ID:{user_id[:6]}")
+        
+        total_coins = user_data['total_farmed']
+        level = get_user_level(total_coins)
+        medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i-1]
+        
+        text += f"{medal} {name}\n"
+        text += f"   {level['name']} | {total_coins} коинов\n\n"
+    
+    text += "📈 Подними свой уровень: /farm и /level"
+    await update.message.reply_text(text)
+
+# ========== КОМАНДА /PARTY ==========
 async def party_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Поиск тимы Dota 2 по MMR"""
     user = update.effective_user
@@ -306,95 +607,7 @@ async def party_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(result)
 
-# ========== КОМАНДА /LEVEL ==========
-async def level_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать уровень игрока"""
-    user = update.effective_user
-    user_id = str(user.id)
-    user_data = db.get_user(user_id)
-    
-    total_coins = user_data['total_farmed']
-    current_level, next_level, progress, coins_needed = get_level_progress(total_coins)
-    
-    avg_farm = 2.5
-    farms_needed = max(1, int(coins_needed / avg_farm)) if coins_needed > 0 else 0
-    
-    text = f"""
-📊 УРОВЕНЬ ИГРОКА
-
-👤 Игрок: {user.first_name}
-💰 Всего заработано: {total_coins} коинов
-🏆 Уровень: {current_level['name']}
-📈 Прогресс: {progress}%
-📊 Фармов: {user_data['farm_count']}
-"""
-    
-    if next_level:
-        text += f"""
-🎯 ДО СЛЕДУЮЩЕГО УРОВНЯ:
-{next_level['name']}
-💰 Нужно коинов: {coins_needed}
-🔄 Примерно фармов: {farms_needed}
-⏰ При {FARM_COOLDOWN}ч КД: ~{farms_needed * FARM_COOLDOWN} часов
-"""
-    else:
-        text += """
-🎉 ВЫ ДОСТИГЛИ МАКСИМАЛЬНОГО УРОВНЯ!
-🔥 Теперь вы Божество KMEbot!
-"""
-    
-    text += "\n📋 СИСТЕМА УРОВНЕЙ:\n"
-    for level in LEVELS:
-        arrow = "➡️" if level["level"] == current_level["level"] else "  "
-        text += f"{arrow} {level['name']}: {level['min_coins']}-{level['max_coins'] if level['max_coins'] < 1000000 else '∞'} коинов\n"
-    
-    await update.message.reply_text(text)
-
-# ========== ОБНОВЛЁННЫЙ /BALANCE С УРОВНЕМ ==========
-async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = str(user.id)
-    user_data = db.get_user(user_id)
-    
-    total_coins = user_data['total_farmed']
-    current_level, next_level, progress, coins_needed = get_level_progress(total_coins)
-    
-    farm_timer = ""
-    if user_data['last_farm']:
-        last = datetime.fromisoformat(user_data['last_farm'])
-        now = datetime.now()
-        cooldown = timedelta(hours=FARM_COOLDOWN)
-        if now - last < cooldown:
-            next_farm = last + cooldown
-            wait = next_farm - now
-            hours = int(wait.total_seconds() // 3600)
-            minutes = int((wait.total_seconds() % 3600) // 60)
-            farm_timer = f"⏳ До фарма: {hours:02d}:{minutes:02d}\n"
-        else:
-            farm_timer = "✅ Можно фармить! /farm\n"
-    else:
-        farm_timer = "✅ Можно фармить! /farm\n"
-    
-    text = f"""
-👤 Игрок: {user.first_name}
-💰 Текущие коины: {user_data['coins']}
-🏆 Всего заработано: {total_coins}
-📊 Уровень: {current_level['name']} ({progress}%)
-
-🎯 Статистика:
-📈 Фармов: {user_data['farm_count']}
-✅ Успешных краж: {user_data['steal_success']}
-❌ Провалов: {user_data['steal_failed']}
-💰 Украдено: {user_data['stolen_total']}
-💸 Потеряно: {user_data['lost_total']}
-
-{farm_timer}
-📈 Узнать подробнее об уровне: /level
-"""
-    
-    await update.message.reply_text(text)
-
-# ========== ОБНОВЛЁННЫЙ /START С УРОВНЯМИ ==========
+# ========== ОСТАЛЬНЫЕ КОМАНДЫ ==========
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_data = db.get_user(user.id)
@@ -470,67 +683,27 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(text)
 
-# ========== ОБНОВЛЁННЫЙ /FARM С УВЕДОМЛЕНИЕМ ОБ УРОВНЕ ==========
-async def farm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    user_id = str(user.id)
+    user_data = db.get_user(user.id)
     
-    can_farm, msg = db.can_farm(user_id)
+    text = "🛍️ МАГАЗИН KMEbot\n\n"
     
-    if not can_farm:
-        await update.message.reply_text(msg)
-        return
+    for item_id, item in SHOP_ITEMS.items():
+        text += f"{item_id}. {item['name']}\n"
+        text += f"   💰 {item['price']} коинов\n"
+        text += f"   📝 {item['description']}\n"
+        text += f"   🛒 /buy_{item_id}\n\n"
     
-    coins = random.randint(0, 5)
-    bonus_msg = ""
-    emoji = "💰"
+    total_coins = user_data['total_farmed']
+    current_level = get_user_level(total_coins)
     
-    chance = random.random()
+    text += f"💰 Ваш баланс: {user_data['coins']} коинов\n"
+    text += f"🏆 Ваш уровень: {current_level['name']}\n"
+    text += "🔄 Все предметы можно обменять на услуги!"
     
-    # 10% шанс на минус коин (увеличено)
-    if chance < 0.10:
-        bonus = 2
-        coins += bonus
-        bonus_msg = f"\n🎉 УДАЧА! +{bonus} коина!"
-        emoji = "🎉"
-    elif chance < 0.20:
-        penalty = random.choice([-1, -2])
-        original_coins = coins
-        coins = max(0, coins + penalty)
-        if penalty == -1:
-            bonus_msg = f"\n😕 Неудача... -1 коин ({original_coins} → {coins})"
-            emoji = "😕"
-        else:
-            bonus_msg = f"\n😞 Печаль... -2 коина ({original_coins} → {coins})"
-            emoji = "😞"
-    
-    old_balance = db.get_user(user_id)['total_farmed']
-    new_balance = db.add_coins(user_id, coins)
-    
-    old_level = get_user_level(old_balance)
-    new_level = get_user_level(new_balance)
-    
-    level_up_msg = ""
-    if old_level['level'] < new_level['level']:
-        level_up_msg = f"\n\n🎊 УРОВЕНЬ ПОВЫШЕН! Теперь ты {new_level['name']}!"
-    
-    result = f"""
-{emoji} Фарм завершен!
+    await update.message.reply_text(text)
 
-Получено: {coins} коинов{bonus_msg}
-💰 Баланс: {db.get_user(user_id)['coins']}
-🏆 Всего: {new_balance}
-📊 Уровень: {new_level['name']}{level_up_msg}
-
-⏳ Следующий через {FARM_COOLDOWN}ч
-"""
-    
-    if coins == 0:
-        result += "\n💡 Не расстраивайся! Пиши /level чтобы увидеть прогресс!"
-    
-    await update.message.reply_text(result)
-
-# ========== КОМАНДА ПОКУПКИ ПРЕДМЕТА ==========
 async def buy_item_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int):
     """Покупка предмета из магазина"""
     user = update.effective_user
@@ -562,7 +735,6 @@ async def buy_item_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, item_
     
     await update.message.reply_text(text)
 
-# ========== КОМАНДА ИНВЕНТАРЯ ==========
 async def inventory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = str(user.id)
@@ -604,60 +776,6 @@ async def inventory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = f"📦 ВАШ ИНВЕНТАРЬ ({len(user_data['inventory'])} предметов)\n🔄 Нажмите на предмет для обмена"
     await update.message.reply_text(text, reply_markup=reply_markup)
 
-# ========== КОМАНДА МАГАЗИНА ==========
-async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_data = db.get_user(user.id)
-    
-    text = "🛍️ МАГАЗИН KMEbot\n\n"
-    
-    for item_id, item in SHOP_ITEMS.items():
-        text += f"{item_id}. {item['name']}\n"
-        text += f"   💰 {item['price']} коинов\n"
-        text += f"   📝 {item['description']}\n"
-        text += f"   🛒 /buy_{item_id}\n\n"
-    
-    total_coins = user_data['total_farmed']
-    current_level = get_user_level(total_coins)
-    
-    text += f"💰 Ваш баланс: {user_data['coins']} коинов\n"
-    text += f"🏆 Ваш уровень: {current_level['name']}\n"
-    text += "🔄 Все предметы можно обменять на услуги!"
-    
-    await update.message.reply_text(text)
-
-# ========== КОМАНДА ТОП ==========
-async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not db.data:
-        await update.message.reply_text("📭 Пока нет игроков!")
-        return
-    
-    top_users = sorted(
-        db.data.items(),
-        key=lambda x: x[1]['total_farmed'],
-        reverse=True
-    )[:5]
-    
-    text = "🏆 ТОП 5 ИГРОКОВ ПО УРОВНЮ 🏆\n\n"
-    
-    for i, (user_id, user_data) in enumerate(top_users, 1):
-        username = user_data.get('username', '')
-        if username:
-            name = f"@{username}"
-        else:
-            name = user_data.get('display_name', f"ID:{user_id[:6]}")
-        
-        total_coins = user_data['total_farmed']
-        level = get_user_level(total_coins)
-        medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i-1]
-        
-        text += f"{medal} {name}\n"
-        text += f"   {level['name']} | {total_coins} коинов\n\n"
-    
-    text += "📈 Подними свой уровень: /farm и /level"
-    await update.message.reply_text(text)
-
-# ========== КОМАНДА ПОМОЩИ ==========
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = f"""
 🆘 ПОМОЩЬ ПО KMEbot
@@ -666,8 +784,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📋 ОСНОВНЫЕ КОМАНДЫ:
 /farm - коины каждые {FARM_COOLDOWN}ч (0-5 коинов)
-/balance - ваш баланс и уровень
-/level - подробная информация об уровне
+/balance - ваш баланс и уровень (админ может ответить на сообщение игрока)
+/level - информация об уровне (админ может ответить на сообщение игрока)
 /top - топ игроков по уровню
 /shop - магазин товаров
 /inventory - ваши покупки с обменом
@@ -684,6 +802,11 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎮 ПОИСК ТИМЫ DOTA 2:
 /party 2500 - разошлёт всем сообщение о поиске тимы
 Диапазон MMR: 0-13000
+
+💰 КОМАНДА /give (только для админа):
+1. Ответьте на сообщение игрока
+2. Напишите: /give 100
+3. Бот выдаст коины и уведомит игрока
 
 👤 Создатель: {ADMIN_USERNAME}
 """
@@ -810,8 +933,10 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📊 КОМАНДЫ:
 /stats - полная статистика
-/give [ID] [сумма] - выдать коины
+/give [сумма] - выдать коины (ответить на сообщение игрока)
 /removeitem [ID] [индекс] - удалить обменянный предмет
+/balance - баланс игрока (ответить на сообщение)
+/level - уровень игрока (ответить на сообщение)
 
 📈 СИСТЕМА:
 Уровней: {len(LEVELS)}
@@ -822,59 +947,6 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 👤 Админ: {ADMIN_USERNAME}
 """
     await update.message.reply_text(text)
-
-async def give_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Выдать коины игроку"""
-    user = update.effective_user
-    
-    if not is_admin(user.id):
-        await update.message.reply_text("❌ Эта команда только для администратора!")
-        return
-    
-    if len(context.args) != 2:
-        await update.message.reply_text("❌ Формат: /give [ID] [сумма]\nПример: /give 123456789 100")
-        return
-    
-    try:
-        target_id = str(context.args[0])
-        amount = int(context.args[1])
-        
-        if amount <= 0:
-            await update.message.reply_text("❌ Сумма должна быть положительной!")
-            return
-        
-        target_data = db.get_user(target_id)
-        old_balance = target_data['coins']
-        new_balance = db.add_coins(target_id, amount, from_farm=False, from_admin=True)
-        
-        username = target_data.get('username', '')
-        display_name = target_data.get('display_name', f"ID:{target_id}")
-        
-        text = f"""
-✅ КОИНЫ ВЫДАНЫ!
-
-👤 Игрок: {f'@{username}' if username else display_name}
-💰 Сумма: {amount} коинов
-💳 Было: {old_balance}
-💳 Стало: {new_balance}
-
-📊 Всего выдано админом: {target_data['admin_gifted']}
-"""
-        
-        await update.message.reply_text(text)
-        
-        try:
-            await context.bot.send_message(
-                chat_id=target_id,
-                text=f"🎉 АДМИНИСТРАТОР ВЫДАЛ ВАМ {amount} КОИНОВ!\n💰 Баланс: {new_balance}"
-            )
-        except:
-            pass
-            
-    except ValueError:
-        await update.message.reply_text("❌ Неверный формат суммы!")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Полная статистика бота"""
@@ -999,6 +1071,11 @@ def main():
     print(f"🔄 Инвентарь с кнопками обмена")
     print(f"👑 Админ ID: {ADMIN_ID}")
     print("=" * 60)
+    print("💎 КОМАНДЫ ПРИ ОТВЕТЕ НА СООБЩЕНИЕ:")
+    print("✅ /give [сумма] - выдать коины игроку")
+    print("✅ /balance - показать баланс игрока")
+    print("✅ /level - показать уровень игрока")
+    print("=" * 60)
     
     app = Application.builder().token(TOKEN).build()
     
@@ -1045,4 +1122,3 @@ if __name__ == "__main__":
         print(f"❌ Критическая ошибка: {e}")
         import traceback
         traceback.print_exc()
-
