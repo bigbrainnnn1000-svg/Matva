@@ -1,3 +1,4 @@
+
 import json
 import os
 import random
@@ -5,7 +6,7 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 
-TOKEN = "8542959870:AAHzEChit6gsHlLzxNEg-090lNpBZwItU2E"
+TOKEN = "8542959870:AAFaEvHTCmnE2yToaxO0f0vzoExRI-F_prY"
 ADMIN_ID = 6443845944
 ADMIN_USERNAME = "@Matvatok"
 FARM_COOLDOWN = 4
@@ -13,7 +14,7 @@ STEAL_COOLDOWN = 30
 STEAL_AMOUNT = 10
 STEAL_CHANCE = 50
 
-# СИСТЕМА УРОВНЕЙ (5 уровней)
+# Система уровней (5 уровней)
 LEVELS = [
     {"level": 1, "name": "👶 Рекрут", "min_coins": 0, "max_coins": 100},
     {"level": 2, "name": "🛡️ Страж", "min_coins": 101, "max_coins": 200},
@@ -238,52 +239,32 @@ def is_admin(user_id):
 
 # ========== КОМАНДА /PARTY (0-13000) ==========
 async def party_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Поиск тимы - формат /party (0-13000)"""
+    """Поиск тимы Dota 2 по MMR"""
     user = update.effective_user
     
     if not context.args:
         await update.message.reply_text(
-            "❌ Неправильный формат!\n\n"
-            "✅ Напишите: /party (0-13000)\n\n"
+            "🎮 ПОИСК ТИМЫ DOTA 2\n\n"
+            "✅ Напишите свой MMR: /party 2500\n\n"
             "📊 Примеры:\n"
-            "/party (2500)\n"
-            "/party (1000-3000)\n"
-            "/party (5000)\n\n"
-            "📨 Сообщение будет разослано всем игрокам в ЛС"
+            "/party 2500\n"
+            "/party 5000\n"
+            "/party 100\n\n"
+            "🎯 Диапазон: от 0 до 13000\n\n"
+            "📨 Сообщение будет разослано всем зарегистрированным игрокам!"
         )
         return
     
-    mmr_arg = context.args[0]
-    
-    # Убираем скобки если есть
-    if mmr_arg.startswith('(') and mmr_arg.endswith(')'):
-        mmr_arg = mmr_arg[1:-1]
-    elif mmr_arg.startswith('('):
-        mmr_arg = mmr_arg[1:]
-    elif mmr_arg.endswith(')'):
-        mmr_arg = mmr_arg[:-1]
-    
-    # Проверяем формат
-    if '-' in mmr_arg:
-        try:
-            min_mmr, max_mmr = map(int, mmr_arg.split('-'))
-            if min_mmr < 0 or max_mmr > 13000 or min_mmr > max_mmr:
-                await update.message.reply_text("❌ Неправильный диапазон! (0-13000)")
-                return
-            mmr_text = f"{min_mmr}-{max_mmr}"
-        except:
-            await update.message.reply_text("❌ Неправильный формат! Пример: /party (1000-3000)")
+    try:
+        mmr = int(context.args[0])
+        
+        if mmr < 0 or mmr > 13000:
+            await update.message.reply_text("❌ MMR должен быть от 0 до 13000!")
             return
-    else:
-        try:
-            mmr = int(mmr_arg)
-            if mmr < 0 or mmr > 13000:
-                await update.message.reply_text("❌ MMR должен быть от 0 до 13000!")
-                return
-            mmr_text = f"{mmr}"
-        except:
-            await update.message.reply_text("❌ Введите число! Пример: /party (2500)")
-            return
+        
+    except ValueError:
+        await update.message.reply_text("❌ Введите число для MMR!")
+        return
     
     user_name = f"@{user.username}" if user.username else user.first_name
     chat_title = update.message.chat.title if update.message.chat.title else "этот чат"
@@ -291,7 +272,7 @@ async def party_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     broadcast_text = (
         f"🎮 ПОИСК ТИМЫ DOTA 2\n\n"
         f"👤 Ищет команду: {user_name}\n"
-        f"📊 MMR: ({mmr_text})\n\n"
+        f"📊 Примерный MMR: ~{mmr}\n\n"
         f"💬 Зайдите в чат '{chat_title}' и напишите {user_name}\n"
         f"📍 Чтобы узнать подробности и собраться на игру!"
     )
@@ -317,7 +298,7 @@ async def party_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = (
         f"✅ РАССЫЛКА ЗАВЕРШЕНА!\n\n"
         f"👤 Вы: {user_name}\n"
-        f"📊 MMR: ({mmr_text})\n\n"
+        f"📊 MMR: ~{mmr}\n\n"
         f"📨 Отправлено: {notified} игрокам\n"
         f"👥 Всего в базе: {total_players}\n\n"
         f"💬 Ждите ответа в чате '{chat_title}'!"
@@ -444,14 +425,14 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎮 После регистрации в ЛС ты сможешь:
 • 📈 Смотреть свой уровень (/level)
 • 💰 Получать коины от админа
-• 🎯 Искать тиму по MMR (/party (2500))
+• 🎯 Искать тиму по MMR (/party 2500)
 • 🛍️ Покупать и обменивать предметы
 
 💬 Пока можешь использовать в чате:
 /farm - фармить коины (0-5 коинов)
 /balance - баланс и уровень
 /shop - магазин
-/party (0-13000) - искать команду
+/party ммр - искать команду (0-13000)
 """
     else:
         text = f"""
@@ -472,7 +453,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /shop - магазин товаров
 /inventory - ваши покупки с обменом
 /help - помощь
-/party (0-13000) - искать команду Dota 2
+/party ммр - искать команду Dota 2
 
 📈 СИСТЕМА УРОВНЕЙ:
 👶 Рекрут - 0-100 коинов
@@ -482,14 +463,14 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🔥 Божество - 401+ коинов
 
 🎮 ПОИСК ТИМЫ DOTA 2:
-• /party (2500) - найдет тиму ~2500 MMR
-• /party (1000-3000) - диапазон MMR
-• /party (5000) - найдет тиму ~5000 MMR
+• /party 2500 - найдет тиму ~2500 MMR
+• /party 5000 - найдет тиму ~5000 MMR
+• Диапазон: 0-13000 MMR
 """
     
     await update.message.reply_text(text)
 
-# ========== ОБНОВЛЁННЫЙ /FARM С ПОВЫШЕННЫМ ШАНСОМ МИНУС КОИНА ==========
+# ========== ОБНОВЛЁННЫЙ /FARM С УВЕДОМЛЕНИЕМ ОБ УРОВНЕ ==========
 async def farm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = str(user.id)
@@ -506,13 +487,13 @@ async def farm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     chance = random.random()
     
-    # ПОВЫШЕННЫЙ ШАНС МИНУС КОИНА ДО 10%
-    if chance < 0.10:  # 10% шанс удачи
+    # 10% шанс на минус коин (увеличено)
+    if chance < 0.10:
         bonus = 2
         coins += bonus
         bonus_msg = f"\n🎉 УДАЧА! +{bonus} коина!"
         emoji = "🎉"
-    elif chance < 0.20:  # 10% шанс неудачи (увеличен с 8% до 10%)
+    elif chance < 0.20:
         penalty = random.choice([-1, -2])
         original_coins = coins
         coins = max(0, coins + penalty)
@@ -574,7 +555,6 @@ async def buy_item_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, item_
 🛍️ Купить ещё: /shop
 """
         
-        # Если предмет обмениваемый, показываем инструкцию
         if SHOP_ITEMS[item_id]["exchangeable"]:
             text += "\n⚠️ ВАЖНО: Для обмена предмета:\n1. Откройте /inventory\n2. Нажмите на предмет\n3. Подтвердите обмен\n4. Админ получит уведомление!"
     else:
@@ -691,7 +671,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /top - топ игроков по уровню
 /shop - магазин товаров
 /inventory - ваши покупки с обменом
-/party (0-13000) - искать команду Dota 2
+/party ммр - искать команду Dota 2
 /help - эта справка
 
 📈 СИСТЕМА УРОВНЕЙ:
@@ -702,8 +682,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🔥 Божество - 401+ коинов
 
 🎮 ПОИСК ТИМЫ DOTA 2:
-/party (2500) - разошлёт всем сообщение о поиске тимы
-/party (1000-3000) - диапазон MMR
+/party 2500 - разошлёт всем сообщение о поиске тимы
 Диапазон MMR: 0-13000
 
 👤 Создатель: {ADMIN_USERNAME}
@@ -779,7 +758,6 @@ async def inventory_callback_handler(update: Update, context: ContextTypes.DEFAU
         
         await query.answer(f"✅ {item['name']} отправлен на обмен! Админ получил уведомление.", show_alert=True)
         
-        # Обновляем сообщение
         user_data = db.get_user(user_id)
         
         if not user_data['inventory']:
@@ -822,4 +800,248 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(user.id):
         await update.message.reply_text("❌ Эта команда только для администратора!")
         return
+    
+    text = f"""
+👑 ПАНЕЛЬ АДМИНИСТРАТОРА
 
+👥 Игроков в базе: {len(db.data)}
+💰 Общий оборот: {sum(user['total_farmed'] for user in db.data.values())}
+🔄 Предметов куплено: {sum(len(user['inventory']) for user in db.data.values())}
+
+📊 КОМАНДЫ:
+/stats - полная статистика
+/give [ID] [сумма] - выдать коины
+/removeitem [ID] [индекс] - удалить обменянный предмет
+
+📈 СИСТЕМА:
+Уровней: {len(LEVELS)}
+Фарм: 0-5 коинов / {FARM_COOLDOWN}ч
+Кража: {STEAL_AMOUNT} коинов / {STEAL_COOLDOWN}мин
+Шанс кражи: {STEAL_CHANCE}%
+
+👤 Админ: {ADMIN_USERNAME}
+"""
+    await update.message.reply_text(text)
+
+async def give_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выдать коины игроку"""
+    user = update.effective_user
+    
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Эта команда только для администратора!")
+        return
+    
+    if len(context.args) != 2:
+        await update.message.reply_text("❌ Формат: /give [ID] [сумма]\nПример: /give 123456789 100")
+        return
+    
+    try:
+        target_id = str(context.args[0])
+        amount = int(context.args[1])
+        
+        if amount <= 0:
+            await update.message.reply_text("❌ Сумма должна быть положительной!")
+            return
+        
+        target_data = db.get_user(target_id)
+        old_balance = target_data['coins']
+        new_balance = db.add_coins(target_id, amount, from_farm=False, from_admin=True)
+        
+        username = target_data.get('username', '')
+        display_name = target_data.get('display_name', f"ID:{target_id}")
+        
+        text = f"""
+✅ КОИНЫ ВЫДАНЫ!
+
+👤 Игрок: {f'@{username}' if username else display_name}
+💰 Сумма: {amount} коинов
+💳 Было: {old_balance}
+💳 Стало: {new_balance}
+
+📊 Всего выдано админом: {target_data['admin_gifted']}
+"""
+        
+        await update.message.reply_text(text)
+        
+        try:
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=f"🎉 АДМИНИСТРАТОР ВЫДАЛ ВАМ {amount} КОИНОВ!\n💰 Баланс: {new_balance}"
+            )
+        except:
+            pass
+            
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат суммы!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Полная статистика бота"""
+    user = update.effective_user
+    
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Эта команда только для администратора!")
+        return
+    
+    total_players = len(db.data)
+    total_coins = sum(user['coins'] for user in db.data.values())
+    total_farmed = sum(user['total_farmed'] for user in db.data.values())
+    total_items = sum(len(user['inventory']) for user in db.data.values())
+    
+    level_counts = {level["level"]: 0 for level in LEVELS}
+    
+    for user_data in db.data.values():
+        level = get_user_level(user_data['total_farmed'])
+        level_counts[level["level"]] += 1
+    
+    top_players = sorted(
+        db.data.items(),
+        key=lambda x: x[1]['total_farmed'],
+        reverse=True
+    )[:3]
+    
+    text = f"""
+📊 ПОЛНАЯ СТАТИСТИКА БОТА
+
+👥 ИГРОКИ:
+Всего: {total_players}
+Активных: {sum(1 for user in db.data.values() if user['total_farmed'] > 0)}
+
+💰 ЭКОНОМИКА:
+Текущие коины: {total_coins}
+Всего заработано: {total_farmed}
+Выдано админом: {sum(user['admin_gifted'] for user in db.data.values())}
+
+📈 УРОВНИ:
+"""
+    
+    for level in LEVELS:
+        count = level_counts[level["level"]]
+        percentage = (count / total_players * 100) if total_players > 0 else 0
+        text += f"{level['name']}: {count} ({percentage:.1f}%)\n"
+    
+    text += f"\n🎮 АКТИВНОСТЬ:\n"
+    text += f"Фармов: {sum(user['farm_count'] for user in db.data.values())}\n"
+    text += f"Краж: {sum(user['steal_success'] + user['steal_failed'] for user in db.data.values())}\n"
+    text += f"Успешных краж: {sum(user['steal_success'] for user in db.data.values())}\n"
+    text += f"Покупок: {total_items}\n"
+    
+    text += f"\n🏆 ТОП 3 ИГРОКА:\n"
+    for i, (player_id, player_data) in enumerate(top_players, 1):
+        username = player_data.get('username', '')
+        name = f"@{username}" if username else player_data.get('display_name', f"ID:{player_id[:6]}")
+        level = get_user_level(player_data['total_farmed'])
+        text += f"{i}. {name} - {level['name']} ({player_data['total_farmed']} коинов)\n"
+    
+    text += f"\n🔄 Последнее обновление: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+    
+    await update.message.reply_text(text)
+
+async def removeitem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удалить обменянный предмет у игрока"""
+    user = update.effective_user
+    
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Эта команда только для администратора!")
+        return
+    
+    if len(context.args) != 2:
+        await update.message.reply_text("❌ Формат: /removeitem [ID] [индекс]\nПример: /removeitem 123456789 0")
+        return
+    
+    try:
+        target_id = str(context.args[0])
+        item_index = int(context.args[1])
+        
+        success = db.remove_exchanged_item(target_id, item_index)
+        
+        if success:
+            target_data = db.get_user(target_id)
+            username = target_data.get('username', '')
+            display_name = target_data.get('display_name', f"ID:{target_id}")
+            
+            text = f"""
+✅ ПРЕДМЕТ УДАЛЕН!
+
+👤 Игрок: {f'@{username}' if username else display_name}
+📦 Индекс предмета: {item_index}
+🔄 Осталось предметов: {len(target_data['inventory'])}
+
+💡 Предмет был помечен как обменянный и удален из инвентаря.
+"""
+            await update.message.reply_text(text)
+            
+            try:
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text="✅ АДМИНИСТРАТОР ПОДТВЕРДИЛ ВЫПОЛНЕНИЕ УСЛУГИ!\n📦 Предмет удален из вашего инвентаря."
+                )
+            except:
+                pass
+        else:
+            await update.message.reply_text("❌ Не удалось удалить предмет. Возможно:\n1. Предмет не существует\n2. Предмет не был обменян\n3. Неправильный индекс")
+            
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат индекса!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+# ========== ЗАПУСК БОТА ==========
+def main():
+    print("=" * 60)
+    print("🚀 ЗАПУСК KMEbot v5.0 - УРОВНИ + ПОИСК ТИМЫ")
+    print("=" * 60)
+    print(f"👥 Игроков в базе: {len(db.data)}")
+    print(f"📈 Уровней: {len(LEVELS)}")
+    print(f"💰 Фарм: 0-5 коинов, {FARM_COOLDOWN}ч КД")
+    print(f"🎮 Поиск тимы: /party MMR (0-13000)")
+    print(f"🔄 Инвентарь с кнопками обмена")
+    print(f"👑 Админ ID: {ADMIN_ID}")
+    print("=" * 60)
+    
+    app = Application.builder().token(TOKEN).build()
+    
+    # Команды
+    app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("farm", farm_cmd))
+    app.add_handler(CommandHandler("balance", balance_cmd))
+    app.add_handler(CommandHandler("level", level_cmd))
+    app.add_handler(CommandHandler("top", top_cmd))
+    app.add_handler(CommandHandler("shop", shop_cmd))
+    app.add_handler(CommandHandler("inventory", inventory_cmd))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("party", party_cmd))
+    
+    # Обработчики покупки предметов
+    for item_id in SHOP_ITEMS.keys():
+        app.add_handler(CommandHandler(f"buy_{item_id}", 
+                                      lambda update, context, item_id=item_id: buy_item_cmd(update, context, item_id)))
+    
+    # Обработчик инвентаря (кнопки)
+    app.add_handler(CallbackQueryHandler(inventory_callback_handler, pattern="^inv_"))
+    
+    # Команды админа
+    app.add_handler(CommandHandler("admin", admin_cmd))
+    app.add_handler(CommandHandler("give", give_cmd))
+    app.add_handler(CommandHandler("stats", stats_cmd))
+    app.add_handler(CommandHandler("removeitem", removeitem_cmd))
+    
+    print("✅ Бот запущен и готов к работе!")
+    print("📊 Статистика: /stats - просмотр статистики бота")
+    print("🎮 Поиск тимы: /party 2500 - пример использования")
+    print("📈 Уровни: /level - информация об уровне")
+    print("=" * 60)
+    
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+# ========== ЗАПУСК ==========
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n🛑 Бот остановлен пользователем")
+    except Exception as e:
+        print(f"❌ Критическая ошибка: {e}")
+        import traceback
+        traceback.print_exc()
