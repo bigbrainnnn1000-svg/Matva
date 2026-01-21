@@ -174,6 +174,76 @@ class Database:
             thief['steal_failed'] += 1
             return False, "❌ Неудачная попытка кражи! Жертва заметила.", 0, 0
     
+    def steal_simple(self, thief_id):
+        """Упрощенная кража без указания жертвы (кража у рандомного игрока из базы)"""
+        thief = self.get_user(thief_id)
+        
+        # Проверяем, есть ли у вора достаточно коинов для возможной потери
+        if thief['coins'] < STEAL_AMOUNT:
+            return False, f"❌ У вас недостаточно коинов для кражи! Нужно минимум {STEAL_AMOUNT} коинов.", 0
+        
+        # Проверяем кулдаун
+        can_steal, msg = self.can_steal(thief_id)
+        if not can_steal:
+            return False, f"⏳ {msg}", 0
+        
+        # Получаем список всех пользователей кроме вора
+        potential_victims = [uid for uid in self.data.keys() if uid != thief_id]
+        
+        if not potential_victims:
+            return False, "❌ В базе нет других игроков!", 0
+        
+        # Выбираем случайную жертву
+        victim_id = random.choice(potential_victims)
+        victim = self.get_user(victim_id)
+        
+        # Проверяем, есть ли у жертвы коины
+        if victim['coins'] < STEAL_AMOUNT:
+            return False, f"❌ У выбранной жертвы нет {STEAL_AMOUNT} коинов!", 0
+        
+        # Обновляем время последней кражи
+        thief['last_steal'] = datetime.now().isoformat()
+        
+        # 50/50 шанс
+        if random.choice([True, False]):  # Успешная кража
+            # Забираем у жертвы
+            success = self.remove_coins(victim_id, STEAL_AMOUNT)
+            if not success[0]:
+                return False, "❌ Ошибка при краже!", 0
+            
+            # Даем вору
+            self.add_coins(thief_id, STEAL_AMOUNT, from_farm=False)
+            thief['steal_success'] += 1
+            thief['stolen_total'] += STEAL_AMOUNT
+            victim['lost_total'] += STEAL_AMOUNT
+            
+            victim_name = victim.get('username', '')
+            if victim_name:
+                victim_name = f"@{victim_name}"
+            else:
+                victim_name = victim.get('display_name', f"ID:{victim_id[:6]}")
+            
+            return True, f"✅ Вы успешно украли {STEAL_AMOUNT} коинов у {victim_name}!", STEAL_AMOUNT, 0
+        
+        else:  # Провальная кража
+            # Забираем у вора
+            success = self.remove_coins(thief_id, STEAL_AMOUNT)
+            if not success[0]:
+                return False, "❌ Ошибка при краже!", 0
+            
+            # Даем жертве (компенсация)
+            self.add_coins(victim_id, STEAL_AMOUNT, from_farm=False)
+            thief['steal_failed'] += 1
+            victim['stolen_total'] += STEAL_AMOUNT
+            
+            victim_name = victim.get('username', '')
+            if victim_name:
+                victim_name = f"@{victim_name}"
+            else:
+                victim_name = victim.get('display_name', f"ID:{victim_id[:6]}")
+            
+            return False, f"❌ Вас заметили! {victim_name} забрал у вас {STEAL_AMOUNT} коинов в качестве компенсации.", 0, STEAL_AMOUNT
+    
     def buy_item(self, user_id, item_id):
         user = self.get_user(user_id)
         
@@ -235,6 +305,153 @@ db = Database()
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
+
+# ========== КОМАНДА /BROADCAST (ТОЛЬКО ДЛЯ АДМИНА) ==========
+async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Рассылка сообщения всем игрокам"""
+    user = update.effective_user
+    
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Только для админа!")
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "📢 РАССЫЛКА СООБЩЕНИЙ\n\n"
+            "✅ Формат: /broadcast Ваш текст сообщения\n\n"
+            "📝 Примеры:\n"
+            "/broadcast Всем привет! Новый ивент скоро!\n"
+            "/broadcast Обновление бота! Добавлена команда /steal\n\n"
+            "⚠️ Сообщение будет отправлено ВСЕМ игрокам в базе!\n"
+            "👥 Игроков в базе: " + str(len(db.data))
+        )
+        return
+    
+    message_text = " ".join(context.args)
+    
+    if len(message_text) < 3:
+        await update.message.reply_text("❌ Сообщение слишком короткое!")
+        return
+    
+    total_players = len(db.data)
+    if total_players == 0:
+        await update.message.reply_text("❌ В базе нет игроков!")
+        return
+    
+    admin_name = f"@{user.username}" if user.username else user.first_name
+    
+    full_message = (
+        f"📢 ОБЪЯВЛЕНИЕ ОТ АДМИНИСТРАТОРА\n\n"
+        f"👤 От: {admin_name}\n\n"
+        f"💬 Сообщение:\n{message_text}\n\n"
+        f"🏆 KMEbot | /help - помощь"
+    )
+    
+    await update.message.reply_text(f"📢 Рассылка запущена... Ожидайте итогов!")
+    
+    successful = 0
+    failed = 0
+    
+    for player_id in db.data.keys():
+        try:
+            await context.bot.send_message(
+                chat_id=player_id,
+                text=full_message
+            )
+            successful += 1
+        except:
+            failed += 1
+    
+    result = (
+        f"✅ РАССЫЛКА ЗАВЕРШЕНА!\n\n"
+        f"📊 Статистика:\n"
+        f"✅ Успешно: {successful} игроков\n"
+        f"❌ Не удалось: {failed} игроков\n"
+        f"👥 Всего в базе: {total_players}\n\n"
+        f"💬 Ваше сообщение:\n\"{message_text[:100]}{'...' if len(message_text) > 100 else ''}\""
+    )
+    
+    await update.message.reply_text(result)
+
+# ========== КОМАНДА /STEAL (ДЛЯ ВСЕХ ИГРОКОВ) ==========
+async def steal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кража коинов у случайного игрока"""
+    user = update.effective_user
+    user_id = str(user.id)
+    
+    # Проверяем минимальный баланс
+    user_data = db.get_user(user_id)
+    if user_data['coins'] < STEAL_AMOUNT:
+        await update.message.reply_text(
+            f"❌ У вас недостаточно коинов для кражи!\n"
+            f"💰 Нужно минимум: {STEAL_AMOUNT} коинов\n"
+            f"💳 Ваш баланс: {user_data['coins']} коинов\n\n"
+            f"💡 Совет: Используйте /farm чтобы заработать больше!"
+        )
+        return
+    
+    # Проверяем кулдаун
+    can_steal, msg = db.can_steal(user_id)
+    if not can_steal:
+        await update.message.reply_text(
+            f"⏳ КРАЖА НЕДОСТУПНА\n\n"
+            f"{msg}\n\n"
+            f"💰 Стоимость кражи: {STEAL_AMOUNT} коинов\n"
+            f"🎯 Шанс успеха: 50%\n"
+            f"📊 Статистика ваших краж:\n"
+            f"✅ Успешных: {user_data['steal_success']}\n"
+            f"❌ Провалов: {user_data['steal_failed']}"
+        )
+        return
+    
+    # Показываем анимацию ожидания
+    waiting_msg = await update.message.reply_text(
+        f"🎭 ПОДГОТОВКА К КРАЖЕ...\n\n"
+        f"🔍 Ищем подходящую жертву...\n"
+        f"💰 Ставка: {STEAL_AMOUNT} коинов\n"
+        f"🎲 Шанс успеха: 50/50"
+    )
+    
+    # Имитация задержки для драматизма
+    import asyncio
+    await asyncio.sleep(2)
+    
+    # Выполняем кражу
+    success, result, stolen, lost = db.steal_simple(user_id)
+    
+    # Обновляем данные пользователя
+    user_data = db.get_user(user_id)
+    
+    if success:
+        # Успешная кража
+        await waiting_msg.edit_text(
+            f"✅ КРАЖА УСПЕШНА!\n\n"
+            f"{result}\n\n"
+            f"💰 Ваш баланс: {user_data['coins']} коинов\n"
+            f"📊 Статистика краж:\n"
+            f"✅ Успешных: {user_data['steal_success']}\n"
+            f"❌ Провалов: {user_data['steal_failed']}\n"
+            f"💎 Украдено всего: {user_data['stolen_total']} коинов\n\n"
+            f"⏳ Следующая кража через {STEAL_COOLDOWN} минут\n"
+            f"💡 Используйте /balance для полной статистики"
+        )
+    else:
+        if "недостаточно" in result.lower():
+            await waiting_msg.edit_text(result)
+            return
+        
+        # Провальная кража
+        await waiting_msg.edit_text(
+            f"❌ КРАЖА ПРОВАЛЕНА!\n\n"
+            f"{result}\n\n"
+            f"💰 Ваш баланс: {user_data['coins']} коинов\n"
+            f"📊 Статистика краж:\n"
+            f"✅ Успешных: {user_data['steal_success']}\n"
+            f"❌ Провалов: {user_data['steal_failed']}\n"
+            f"💸 Потеряно всего: {user_data['lost_total']} коинов\n\n"
+            f"⏳ Следующая кража через {STEAL_COOLDOWN} минут\n"
+            f"💡 Используйте /farm чтобы восстановить потери"
+        )
 
 # ========== КОМАНДА /GIVE (РАБОТАЕТ ПРИ ОТВЕТЕ НА СООБЩЕНИЕ) ==========
 async def give_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -332,6 +549,7 @@ async def give_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"{level_up_msg}\n\n"
                 f"💬 Используйте:\n"
                 f"• /farm - фармить коины\n"
+                f"• /steal - красть коины (50/50)\n"
                 f"• /level - информация об уровне\n"
                 f"• /shop - магазин\n"
                 f"• /balance - проверить баланс"
@@ -376,6 +594,15 @@ async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         farm_timer = "✅ Можно фармить! /farm\n"
     
+    # Проверяем кулдаун на кражу
+    steal_timer = ""
+    can_steal, steal_msg = db.can_steal(user_id)
+    if can_steal:
+        steal_timer = "✅ Можно красть! /steal\n"
+    else:
+        if "Ждите" in steal_msg:
+            steal_timer = f"⏳ {steal_msg}\n"
+    
     text = f"""
 👤 Игрок: {user_name}
 💰 Текущие коины: {user_data['coins']}
@@ -385,11 +612,11 @@ async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎯 Статистика:
 📈 Фармов: {user_data['farm_count']}
 ✅ Успешных краж: {user_data['steal_success']}
-❌ Провалов: {user_data['steal_failed']}
+❌ Провалов краж: {user_data['steal_failed']}
 💰 Украдено: {user_data['stolen_total']}
 💸 Потеряно: {user_data['lost_total']}
 
-{farm_timer}
+{farm_timer}{steal_timer}
 📈 Подробнее об уровне: /level
 """
     
@@ -424,6 +651,7 @@ async def level_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🏆 Уровень: {current_level['name']}
 📈 Прогресс: {progress}%
 📊 Фармов: {user_data['farm_count']}
+🎭 Краж: {user_data['steal_success'] + user_data['steal_failed']}
 """
     
     if next_level:
@@ -503,7 +731,7 @@ async def farm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
     
     if coins == 0:
-        result += "\n💡 Не расстраивайся! Пиши /level чтобы увидеть прогресс!"
+        result += "\n💡 Не расстраивайся! Попробуй /steal или пиши /level чтобы увидеть прогресс!"
     
     await update.message.reply_text(result)
 
@@ -568,7 +796,7 @@ async def party_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     user_name = f"@{user.username}" if user.username else user.first_name
-    chat_title = update.message.chat.title if update.message.chat.title else "этот чат"
+    chat_title = update.message.chat.title if update.message.chat.title else "этой чат"
     
     broadcast_text = (
         f"🎮 ПОИСК ТИМЫ DOTA 2\n\n"
@@ -638,11 +866,13 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎮 После регистрации в ЛС ты сможешь:
 • 📈 Смотреть свой уровень (/level)
 • 💰 Получать коины от админа
+• 🎭 Красть коины у других (/steal)
 • 🎯 Искать тиму по MMR (/party 2500)
 • 🛍️ Покупать и обменивать предметы
 
 💬 Пока можешь использовать в чате:
 /farm - фармить коины (0-5 коинов)
+/steal - красть коины (50/50 шанс)
 /balance - баланс и уровень
 /shop - магазин
 /party ммр - искать команду (0-13000)
@@ -660,6 +890,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📋 ОСНОВНЫЕ КОМАНДЫ:
 /farm - получить коины (раз в {FARM_COOLDOWN}ч) 0-5 коинов
+/steal - красть коины у других (50/50 шанс, {STEAL_COOLDOWN}мин КД)
 /balance - ваш баланс и статистика
 /level - подробная информация об уровне
 /top - топ игроков
@@ -667,6 +898,13 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /inventory - ваши покупки с обменом
 /help - помощь
 /party ммр - искать команду Dota 2
+
+🎭 КОМАНДА /steal:
+• Ставка: {STEAL_AMOUNT} коинов
+• Шанс успеха: 50%
+• КД: {STEAL_COOLDOWN} минут
+• Успех: +{STEAL_AMOUNT} коинов
+• Провал: -{STEAL_AMOUNT} коинов
 
 📈 СИСТЕМА УРОВНЕЙ:
 👶 Рекрут - 0-100 коинов
@@ -784,6 +1022,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📋 ОСНОВНЫЕ КОМАНДЫ:
 /farm - коины каждые {FARM_COOLDOWN}ч (0-5 коинов)
+/steal - кража коинов у других (50/50 шанс, {STEAL_COOLDOWN}мин КД)
 /balance - ваш баланс и уровень (админ может ответить на сообщение игрока)
 /level - информация об уровне (админ может ответить на сообщение игрока)
 /top - топ игроков по уровню
@@ -791,6 +1030,13 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /inventory - ваши покупки с обменом
 /party ммр - искать команду Dota 2
 /help - эта справка
+
+🎭 КОМАНДА /steal:
+• Ставка: {STEAL_AMOUNT} коинов
+• Шанс успеха: 50%
+• КД: {STEAL_COOLDOWN} минут
+• Успех: +{STEAL_AMOUNT} коинов у случайного игрока
+• Провал: -{STEAL_AMOUNT} коинов (отдаете жертве)
 
 📈 СИСТЕМА УРОВНЕЙ:
 👶 Рекрут - 0-100 коинов
@@ -807,6 +1053,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 1. Ответьте на сообщение игрока
 2. Напишите: /give 100
 3. Бот выдаст коины и уведомит игрока
+
+📢 КОМАНДА /broadcast (только для админа):
+/broadcast Ваше сообщение - рассылка всем игрокам
 
 👤 Создатель: {ADMIN_USERNAME}
 """
@@ -932,6 +1181,7 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🔄 Предметов куплено: {sum(len(user['inventory']) for user in db.data.values())}
 
 📊 КОМАНДЫ:
+/broadcast [текст] - рассылка всем игрокам
 /stats - полная статистика
 /give [сумма] - выдать коины (ответить на сообщение игрока)
 /removeitem [ID] [индекс] - удалить обменянный предмет
@@ -942,7 +1192,7 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Уровней: {len(LEVELS)}
 Фарм: 0-5 коинов / {FARM_COOLDOWN}ч
 Кража: {STEAL_AMOUNT} коинов / {STEAL_COOLDOWN}мин
-Шанс кражи: {STEAL_CHANCE}%
+Шанс кражи: 50%
 
 👤 Админ: {ADMIN_USERNAME}
 """
@@ -1062,11 +1312,13 @@ async def removeitem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== ЗАПУСК БОТА ==========
 def main():
     print("=" * 60)
-    print("🚀 ЗАПУСК KMEbot v5.0 - УРОВНИ + ПОИСК ТИМЫ")
+    print("🚀 ЗАПУСК KMEbot v6.0 - УРОВНИ + КРАЖА + РАССЫЛКА")
     print("=" * 60)
     print(f"👥 Игроков в базе: {len(db.data)}")
     print(f"📈 Уровней: {len(LEVELS)}")
     print(f"💰 Фарм: 0-5 коинов, {FARM_COOLDOWN}ч КД")
+    print(f"🎭 Кража: {STEAL_AMOUNT} коинов, {STEAL_COOLDOWN}мин КД, 50% шанс")
+    print(f"📢 Рассылка: /broadcast для админа")
     print(f"🎮 Поиск тимы: /party MMR (0-13000)")
     print(f"🔄 Инвентарь с кнопками обмена")
     print(f"👑 Админ ID: {ADMIN_ID}")
@@ -1076,12 +1328,18 @@ def main():
     print("✅ /balance - показать баланс игрока")
     print("✅ /level - показать уровень игрока")
     print("=" * 60)
+    print("🎭 НОВАЯ КОМАНДА /steal:")
+    print(f"• Ставка: {STEAL_AMOUNT} коинов")
+    print(f"• Шанс: 50% успех / 50% провал")
+    print(f"• КД: {STEAL_COOLDOWN} минут")
+    print("=" * 60)
     
     app = Application.builder().token(TOKEN).build()
     
     # Команды
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("farm", farm_cmd))
+    app.add_handler(CommandHandler("steal", steal_cmd))
     app.add_handler(CommandHandler("balance", balance_cmd))
     app.add_handler(CommandHandler("level", level_cmd))
     app.add_handler(CommandHandler("top", top_cmd))
@@ -1101,10 +1359,13 @@ def main():
     # Команды админа
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CommandHandler("give", give_cmd))
+    app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("removeitem", removeitem_cmd))
     
     print("✅ Бот запущен и готов к работе!")
+    print("📢 Рассылка: /broadcast Привет всем! - для теста")
+    print("🎭 Кража: /steal - испытайте удачу")
     print("📊 Статистика: /stats - просмотр статистики бота")
     print("🎮 Поиск тимы: /party 2500 - пример использования")
     print("📈 Уровни: /level - информация об уровне")
