@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 
-TOKEN = "8542959870:AAFaEvHTCmnE2yToaxO0f0vzoExRI-F_prY"
+TOKEN = "8542959870:AAHzEChit6gsHlLzxNEg-090lNpBZwItU2E"
 ADMIN_ID = 6443845944
 ADMIN_USERNAME = "@Matvatok"
 FARM_COOLDOWN = 4  # часа
@@ -883,3 +883,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
