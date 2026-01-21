@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 
-TOKEN = "8542959870:AAFaEvHTCmnE2yToaxO0f0vzoExRI-F_prY"
+TOKEN = "8542959870:AAHzEChit6gsHlLzxNEg-090lNpBZwItU2E"
 ADMIN_ID = 6443845944
 ADMIN_USERNAME = "@Matvatok"
 FARM_COOLDOWN = 4
@@ -822,3 +822,4 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(user.id):
         await update.message.reply_text("❌ Эта команда только для администратора!")
         return
+
