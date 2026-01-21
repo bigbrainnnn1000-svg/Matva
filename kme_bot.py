@@ -5,22 +5,56 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 
-TOKEN = "8542959870:AAHzEChit6gsHlLzxNEg-090lNpBZwItU2E"
+TOKEN = "8542959870:AAFaEvHTCmnE2yToaxO0f0vzoExRI-F_prY"
 ADMIN_ID = 6443845944
 ADMIN_USERNAME = "@Matvatok"
-FARM_COOLDOWN = 4  # часа
-STEAL_COOLDOWN = 30  # минут между кражами
-STEAL_AMOUNT = 10   # коинов за кражу
-STEAL_CHANCE = 50   # 50% шанс успеха
+FARM_COOLDOWN = 4
+STEAL_COOLDOWN = 30
+STEAL_AMOUNT = 10
+STEAL_CHANCE = 50
+
+# СИСТЕМА УРОВНЕЙ (5 уровней)
+LEVELS = [
+    {"level": 1, "name": "👶 Рекрут", "min_coins": 0, "max_coins": 100},
+    {"level": 2, "name": "🛡️ Страж", "min_coins": 101, "max_coins": 200},
+    {"level": 3, "name": "⚔️ Рыцарь", "min_coins": 201, "max_coins": 300},
+    {"level": 4, "name": "👑 Титян", "min_coins": 301, "max_coins": 400},
+    {"level": 5, "name": "🔥 Божество", "min_coins": 401, "max_coins": 1000000}
+]
 
 SHOP_ITEMS = {
-    1: {"name": "🔔 Сигна от Kme_Dota", "price": 50, "description": "Сигна от Kme_Dota"},
-    2: {"name": "👥 Сигна от Лсной братвы", "price": 100, "description": "Сигна от Лсной братвы"},
-    3: {"name": "👑 Модер в чате", "price": 150, "description": "Стать модератором в чате"},
-    4: {"name": "🎮 Модер на твиче", "price": 200, "description": "Стать модератором на твиче"},
-    5: {"name": "🎵 Трек про тебя", "price": 300, "description": "Заказать трек про себя"},
-    6: {"name": "⚔️ Dota+", "price": 400, "description": "Получить Dota+ на месяц"}
+    1: {"name": "🔔 Сигна от Kme_Dota", "price": 50, "description": "Сигна от Kme_Dota", "exchangeable": True},
+    2: {"name": "👥 Сигна от Лсной братвы", "price": 100, "description": "Сигна от Лсной братвы", "exchangeable": True},
+    3: {"name": "👑 Модер в чате", "price": 150, "description": "Стать модератором в чате", "exchangeable": True},
+    4: {"name": "🎮 Модер на твиче", "price": 200, "description": "Стать модератором на твиче", "exchangeable": True},
+    5: {"name": "🎵 Трек про тебя", "price": 300, "description": "Заказать трек про себя", "exchangeable": True},
+    6: {"name": "⚔️ Dota+", "price": 400, "description": "Получить Dota+ на месяц", "exchangeable": True}
 }
+
+# ========== ФУНКЦИИ УРОВНЕЙ ==========
+def get_user_level(total_coins):
+    """Определить уровень игрока по количеству коинов"""
+    for level in LEVELS:
+        if level["min_coins"] <= total_coins <= level["max_coins"]:
+            return level
+    return LEVELS[-1]
+
+def get_level_progress(total_coins):
+    """Получить прогресс до следующего уровня"""
+    current_level = get_user_level(total_coins)
+    
+    if current_level["level"] == len(LEVELS):
+        return current_level, None, 100, 0
+    
+    next_level = LEVELS[current_level["level"]]
+    
+    coins_in_current = total_coins - current_level["min_coins"]
+    total_for_current = current_level["max_coins"] - current_level["min_coins"] + 1
+    
+    progress_percent = (coins_in_current / total_for_current) * 100 if total_for_current > 0 else 100
+    coins_needed = next_level["min_coins"] - total_coins
+    
+    return current_level, next_level, int(progress_percent), coins_needed
 
 class Database:
     def __init__(self, filename="kme_data.json"):
@@ -120,31 +154,23 @@ class Database:
         thief = self.get_user(thief_id)
         victim = self.get_user(victim_id)
         
-        # Проверяем что у жертвы есть деньги
         if victim['coins'] < STEAL_AMOUNT:
             return False, "❌ У жертвы нет денег!", 0, 0
         
-        # Обновляем время кражи у вора
         thief['last_steal'] = datetime.now().isoformat()
         
-        # Шанс 50%
         if random.randint(1, 100) <= STEAL_CHANCE:
-            # Успешная кража
             success = self.remove_coins(victim_id, STEAL_AMOUNT)
             if not success[0]:
                 return False, "❌ Ошибка при краже!", 0, 0
             
-            # Добавляем вору
             self.add_coins(thief_id, STEAL_AMOUNT, from_farm=False)
-            
-            # Статистика
             thief['steal_success'] += 1
             thief['stolen_total'] += STEAL_AMOUNT
             victim['lost_total'] += STEAL_AMOUNT
             
             return True, f"✅ Успешно украдено {STEAL_AMOUNT} коинов!", STEAL_AMOUNT, 0
         else:
-            # Неудачная кража
             thief['steal_failed'] += 1
             return False, "❌ Неудачная попытка кражи! Жертва заметила.", 0, 0
     
@@ -165,502 +191,193 @@ class Database:
             'name': item['name'],
             'price': item['price'],
             'description': item['description'],
-            'bought_at': datetime.now().isoformat()
+            'exchangeable': item['exchangeable'],
+            'bought_at': datetime.now().isoformat(),
+            'exchanged': False
         })
         self.save_data()
         return True, f"✅ Куплено: {item['name']} за {item['price']} коинов"
+    
+    def exchange_item(self, user_id, item_index):
+        user = self.get_user(user_id)
+        
+        if item_index >= len(user['inventory']):
+            return False, "❌ Такого предмета нет!"
+        
+        item = user['inventory'][item_index]
+        
+        if not item.get('exchangeable', True):
+            return False, "❌ Этот предмет нельзя обменять!"
+        
+        if item.get('exchanged', False):
+            return False, "❌ Этот предмет уже был обменян!"
+        
+        user['inventory'][item_index]['exchanged'] = True
+        user['inventory'][item_index]['exchanged_at'] = datetime.now().isoformat()
+        self.save_data()
+        
+        return True, item
+    
+    def remove_exchanged_item(self, user_id, item_index):
+        user = self.get_user(user_id)
+        
+        if item_index >= len(user['inventory']):
+            return False
+        
+        if not user['inventory'][item_index].get('exchanged', False):
+            return False
+        
+        user['inventory'].pop(item_index)
+        self.save_data()
+        return True
 
 db = Database()
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
-# ========== АДМИН ПАНЕЛЬ ==========
-async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Только для админа!")
-        return
+# ========== КОМАНДА /PARTY (0-13000) ==========
+async def party_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Поиск тимы - формат /party (0-13000)"""
+    user = update.effective_user
     
-    keyboard = [
-        [InlineKeyboardButton("💰 Выдать коины", callback_data="admin_give")],
-        [InlineKeyboardButton("📊 Статистика бота", callback_data="admin_stats")],
-        [InlineKeyboardButton("👤 Найти игрока", callback_data="admin_find")],
-        [InlineKeyboardButton("📢 Рассылка всем", callback_data="admin_broadcast")],
-        [InlineKeyboardButton("🗑️ Удалить игрока", callback_data="admin_delete")],
-        [InlineKeyboardButton("❌ Закрыть", callback_data="admin_close")]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "👑 АДМИН ПАНЕЛЬ KMEbot\n\n"
-        "Выберите действие:",
-        reply_markup=reply_markup
-    )
-
-async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if not is_admin(query.from_user.id):
-        await query.edit_message_text("❌ Нет доступа!")
-        return
-    
-    data = query.data
-    
-    if data == "admin_give":
-        await query.edit_message_text(
-            "💰 ВЫДАЧА КОИНОВ\n\n"
-            "✅ ЛУЧШИЙ СПОСОБ:\n"
-            "1. Ответьте на сообщение игрока\n"
-            "2. Напишите: /give 100\n\n"
-            "✅ ЧЕРЕЗ USERNAME:\n"
-            "/give @username 100\n\n"
-            "✅ ЧЕРЕЗ ID:\n"
-            "/give 123456789 100\n\n"
-            "📊 Игрок получит уведомление в ЛС"
-        )
-    
-    elif data == "admin_stats":
-        total_users = len(db.data)
-        total_coins = sum(user['coins'] for user in db.data.values())
-        total_farmed = sum(user['total_farmed'] for user in db.data.values())
-        total_gifted = sum(user.get('admin_gifted', 0) for user in db.data.values())
-        
-        # Топ-3 игрока
-        top_users = sorted(
-            db.data.items(),
-            key=lambda x: x[1]['total_farmed'],
-            reverse=True
-        )[:3]
-        
-        top_text = "🏆 ТОП-3 ИГРОКА:\n"
-        for i, (user_id, user_data) in enumerate(top_users, 1):
-            name = user_data.get('username', f"ID:{user_id[:6]}")
-            coins = user_data['total_farmed']
-            top_text += f"{i}. @{name}: {coins} коинов\n"
-        
-        await query.edit_message_text(
-            f"📊 СТАТИСТИКА БОТА\n\n"
-            f"👥 Всего игроков: {total_users}\n"
-            f"💰 Всего коинов: {total_coins}\n"
-            f"🏆 Всего заработано: {total_farmed}\n"
-            f"🎁 Выдано админом: {total_gifted}\n\n"
-            f"{top_text}"
-        )
-    
-    elif data == "admin_find":
-        await query.edit_message_text(
-            "👤 ПОИСК ИГРОКА\n\n"
-            "Формат: /find @username\n"
-            "Или: /find 123456789\n\n"
-            "Пример:\n"
-            "/find @shicds1\n"
-            "/find 6443845944\n\n"
-            "📌 Покажет баланс и статистику"
-        )
-    
-    elif data == "admin_broadcast":
-        await query.edit_message_text(
-            "📢 РАССЫЛКА ВСЕМ\n\n"
-            "Формат: /broadcast ваш_текст\n\n"
-            "Пример:\n"
-            "/broadcast Привет! Новая функция в боте!\n\n"
-            "⚠️ Сообщение получат ВСЕ зарегистрированные игроки"
-        )
-    
-    elif data == "admin_delete":
-        await query.edit_message_text(
-            "🗑️ УДАЛЕНИЕ ИГРОКА\n\n"
-            "Формат: /delete @username\n"
-            "Или: /delete 123456789\n\n"
-            "Пример:\n"
-            "/delete @username\n"
-            "/delete 123456789\n\n"
-            "⚠️ Удалит все данные игрока безвозвратно!"
-        )
-    
-    elif data == "admin_close":
-        await query.delete_message()
-
-# ========== КОМАНДА /GIVE ==========
-async def give_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Только для админа!")
-        return
-    
-    # СПОСОБ 1: Ответ на сообщение
-    if update.message.reply_to_message:
-        if not context.args:
-            await update.message.reply_text("❌ Укажите количество: /give 100")
-            return
-        
-        try:
-            amount = int(context.args[0])
-            if amount <= 0:
-                await update.message.reply_text("❌ Число должно быть больше 0!")
-                return
-        except:
-            await update.message.reply_text("❌ Введите число!")
-            return
-        
-        target_user = update.message.reply_to_message.from_user
-        target_user_id = str(target_user.id)
-        target_data = db.get_user(target_user_id)
-        
-        # Сохраняем данные если их нет
-        if target_user.username and not target_data.get('username'):
-            target_data['username'] = target_user.username
-        if target_user.full_name and not target_data.get('display_name'):
-            target_data['display_name'] = target_user.full_name
-        db.save_data()
-        
-        new_balance = db.add_coins(target_user_id, amount, from_farm=False, from_admin=True)
-        
-        # Формируем ответ
-        target_name = f"@{target_user.username}" if target_user.username else target_user.first_name
-        
-        result = (
-            f"✅ ВЫДАНО {amount} КОИНОВ!\n\n"
-            f"👤 Игрок: {target_name}\n"
-            f"💰 Баланс: {new_balance}\n"
-            f"🎁 Всего выдано: {target_data['admin_gifted'] + amount}"
-        )
-        
-        # Уведомляем игрока
-        try:
-            await context.bot.send_message(
-                chat_id=target_user_id,
-                text=(
-                    f"🎉 АДМИН ВЫДАЛ ВАМ КОИНЫ!\n\n"
-                    f"💰 +{amount} KMEкоинов\n"
-                    f"🏦 Баланс: {new_balance}\n\n"
-                    f"💬 Используйте /shop для покупок"
-                )
-            )
-            result += "\n\n📨 Игрок получил уведомление!"
-        except:
-            result += "\n\n⚠️ Не удалось уведомить игрока"
-        
-        await update.message.reply_text(result)
-        return
-    
-    # СПОСОБ 2: Через аргументы
-    if len(context.args) != 2:
+    if not context.args:
         await update.message.reply_text(
             "❌ Неправильный формат!\n\n"
-            "✅ СПОСОБ 1 (лучший):\n"
-            "Ответьте на сообщение + /give 100\n\n"
-            "✅ СПОСОБ 2:\n"
-            "/give @username 100\n"
-            "Или: /give 123456789 100"
+            "✅ Напишите: /party (0-13000)\n\n"
+            "📊 Примеры:\n"
+            "/party (2500)\n"
+            "/party (1000-3000)\n"
+            "/party (5000)\n\n"
+            "📨 Сообщение будет разослано всем игрокам в ЛС"
         )
         return
     
-    target = context.args[0]
-    try:
-        amount = int(context.args[1])
-        if amount <= 0:
-            await update.message.reply_text("❌ Число должно быть больше 0!")
+    mmr_arg = context.args[0]
+    
+    # Убираем скобки если есть
+    if mmr_arg.startswith('(') and mmr_arg.endswith(')'):
+        mmr_arg = mmr_arg[1:-1]
+    elif mmr_arg.startswith('('):
+        mmr_arg = mmr_arg[1:]
+    elif mmr_arg.endswith(')'):
+        mmr_arg = mmr_arg[:-1]
+    
+    # Проверяем формат
+    if '-' in mmr_arg:
+        try:
+            min_mmr, max_mmr = map(int, mmr_arg.split('-'))
+            if min_mmr < 0 or max_mmr > 13000 or min_mmr > max_mmr:
+                await update.message.reply_text("❌ Неправильный диапазон! (0-13000)")
+                return
+            mmr_text = f"{min_mmr}-{max_mmr}"
+        except:
+            await update.message.reply_text("❌ Неправильный формат! Пример: /party (1000-3000)")
             return
-    except:
-        await update.message.reply_text("❌ Введите число!")
-        return
-    
-    # Поиск игрока
-    target_user_id = None
-    target_name = target
-    
-    if target.isdigit():
-        if target in db.data:
-            target_user_id = target
-            target_name = f"ID:{target[:6]}"
     else:
-        username = target.lstrip('@').lower()
-        for uid, user_data in db.data.items():
-            if user_data.get('username', '').lower() == username:
-                target_user_id = uid
-                target_name = f"@{user_data['username']}"
-                break
+        try:
+            mmr = int(mmr_arg)
+            if mmr < 0 or mmr > 13000:
+                await update.message.reply_text("❌ MMR должен быть от 0 до 13000!")
+                return
+            mmr_text = f"{mmr}"
+        except:
+            await update.message.reply_text("❌ Введите число! Пример: /party (2500)")
+            return
     
-    if not target_user_id:
-        await update.message.reply_text(f"❌ Игрок {target} не найден!")
-        return
+    user_name = f"@{user.username}" if user.username else user.first_name
+    chat_title = update.message.chat.title if update.message.chat.title else "этот чат"
     
-    new_balance = db.add_coins(target_user_id, amount, from_farm=False, from_admin=True)
-    
-    await update.message.reply_text(
-        f"✅ Выдано {amount} коинов!\n"
-        f"👤 Игрок: {target_name}\n"
-        f"💰 Баланс: {new_balance}"
+    broadcast_text = (
+        f"🎮 ПОИСК ТИМЫ DOTA 2\n\n"
+        f"👤 Ищет команду: {user_name}\n"
+        f"📊 MMR: ({mmr_text})\n\n"
+        f"💬 Зайдите в чат '{chat_title}' и напишите {user_name}\n"
+        f"📍 Чтобы узнать подробности и собраться на игру!"
     )
+    
+    total_players = len(db.data)
+    notified = 0
+    
+    await update.message.reply_text(f"📢 Рассылка запущена... ({total_players} получателей)")
+    
+    for player_id, player_data in db.data.items():
+        if player_id == str(user.id):
+            continue
+            
+        try:
+            await context.bot.send_message(
+                chat_id=player_id,
+                text=broadcast_text
+            )
+            notified += 1
+        except:
+            continue
+    
+    result = (
+        f"✅ РАССЫЛКА ЗАВЕРШЕНА!\n\n"
+        f"👤 Вы: {user_name}\n"
+        f"📊 MMR: ({mmr_text})\n\n"
+        f"📨 Отправлено: {notified} игрокам\n"
+        f"👥 Всего в базе: {total_players}\n\n"
+        f"💬 Ждите ответа в чате '{chat_title}'!"
+    )
+    
+    await update.message.reply_text(result)
 
-# ========== КОМАНДА /STEAL ==========
-async def steal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ========== КОМАНДА /LEVEL ==========
+async def level_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать уровень игрока"""
     user = update.effective_user
     user_id = str(user.id)
+    user_data = db.get_user(user_id)
     
-    # Проверка КД
-    can_steal, msg = db.can_steal(user_id)
-    if not can_steal:
-        await update.message.reply_text(msg)
-        return
+    total_coins = user_data['total_farmed']
+    current_level, next_level, progress, coins_needed = get_level_progress(total_coins)
     
-    if not context.args:
-        await update.message.reply_text(
-            "🎯 КОМАНДА КРАЖИ\n\n"
-            "✅ Формат: /steal @username\n"
-            "Пример: /steal @shicds1\n\n"
-            f"💰 Сумма: {STEAL_AMOUNT} коинов\n"
-            f"🎲 Шанс: {STEAL_CHANCE}%\n"
-            f"⏳ КД: {STEAL_COOLDOWN} минут\n\n"
-            "⚠️ Можно красть у любого зарегистрированного игрока"
-        )
-        return
-    
-    target = context.args[0]
-    
-    # Поиск жертвы
-    victim_id = None
-    victim_name = target
-    
-    if target.isdigit():
-        if target in db.data and target != user_id:
-            victim_id = target
-    else:
-        username = target.lstrip('@').lower()
-        for uid, user_data in db.data.items():
-            if user_data.get('username', '').lower() == username and uid != user_id:
-                victim_id = uid
-                victim_name = f"@{user_data['username']}"
-                break
-    
-    if not victim_id:
-        await update.message.reply_text("❌ Цель не найдена или нельзя красть у себя!")
-        return
-    
-    # Пытаемся украсть
-    success, message, stolen, lost = db.steal_attempt(user_id, victim_id)
-    
-    thief_data = db.get_user(user_id)
-    
-    if success:
-        result = (
-            f"🎯 УСПЕШНАЯ КРАЖА!\n\n"
-            f"👤 Жертва: {victim_name}\n"
-            f"💰 Украдено: {stolen} коинов\n"
-            f"🏦 Ваш баланс: {thief_data['coins']}\n"
-            f"📊 Успешных краж: {thief_data['steal_success']}\n\n"
-            f"⏳ Следующая попытка через {STEAL_COOLDOWN} минут"
-        )
-    else:
-        result = (
-            f"🎯 НЕУДАЧНАЯ КРАЖА\n\n"
-            f"👤 Жертва: {victim_name}\n"
-            f"❌ {message}\n"
-            f"🏦 Ваш баланс: {thief_data['coins']}\n"
-            f"📊 Неудачных попыток: {thief_data['steal_failed']}\n\n"
-            f"⏳ Следующая попытка через {STEAL_COOLDOWN} минут"
-        )
-    
-    await update.message.reply_text(result)
-
-# ========== ДРУГИЕ АДМИН КОМАНДЫ ==========
-async def find_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Только для админа!")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("❌ Укажите игрока: /find @username")
-        return
-    
-    target = context.args[0]
-    found_users = []
-    
-    if target.isdigit():
-        if target in db.data:
-            found_users.append((target, db.data[target]))
-    else:
-        username = target.lstrip('@').lower()
-        for uid, user_data in db.data.items():
-            if username in user_data.get('username', '').lower():
-                found_users.append((uid, user_data))
-    
-    if not found_users:
-        await update.message.reply_text("❌ Игрок не найден!")
-        return
-    
-    result = "👤 НАЙДЕННЫЕ ИГРОКИ:\n\n"
-    
-    for uid, user_data in found_users[:3]:  # Показываем первые 3
-        username = user_data.get('username', 'Нет username')
-        display_name = user_data.get('display_name', 'Нет имени')
-        coins = user_data['coins']
-        total_farmed = user_data['total_farmed']
-        admin_gifted = user_data.get('admin_gifted', 0)
-        
-        result += f"👤 @{username}\n"
-        result += f"🆔 ID: {uid}\n"
-        result += f"👁️ Имя: {display_name}\n"
-        result += f"💰 Баланс: {coins}\n"
-        result += f"🏆 Заработано: {total_farmed}\n"
-        result += f"🎁 От админа: {admin_gifted}\n"
-        result += f"📊 Фармов: {user_data['farm_count']}\n"
-        result += "─" * 20 + "\n"
-    
-    await update.message.reply_text(result)
-
-async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Только для админа!")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("❌ Укажите текст: /broadcast Ваш текст")
-        return
-    
-    message = ' '.join(context.args)
-    total_users = len(db.data)
-    sent = 0
-    failed = 0
-    
-    await update.message.reply_text(f"📢 Рассылка начата... ({total_users} получателей)")
-    
-    for user_id in db.data.keys():
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"📢 ОТ АДМИНА:\n\n{message}"
-            )
-            sent += 1
-        except:
-            failed += 1
-    
-    await update.message.reply_text(
-        f"📢 РАССЫЛКА ЗАВЕРШЕНА\n\n"
-        f"✅ Отправлено: {sent}\n"
-        f"❌ Не отправлено: {failed}\n"
-        f"👥 Всего получателей: {total_users}"
-    )
-
-async def delete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Только для админа!")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("❌ Укажите игрока: /delete @username")
-        return
-    
-    target = context.args[0]
-    deleted = False
-    
-    if target.isdigit() and target in db.data:
-        del db.data[target]
-        db.save_data()
-        deleted = True
-        target_name = f"ID:{target[:6]}"
-    else:
-        username = target.lstrip('@').lower()
-        for uid, user_data in db.data.items():
-            if user_data.get('username', '').lower() == username:
-                del db.data[uid]
-                db.save_data()
-                deleted = True
-                target_name = f"@{user_data['username']}"
-                break
-    
-    if deleted:
-        await update.message.reply_text(f"✅ Игрок {target_name} удалён!")
-    else:
-        await update.message.reply_text("❌ Игрок не найден!")
-
-# ========== ОСНОВНЫЕ КОМАНДЫ ==========
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_data = db.get_user(user.id)
-    
-    # Сохраняем данные
-    if user.username:
-        user_data['username'] = user.username
-    if user.full_name:
-        user_data['display_name'] = user.full_name
-    db.save_data()
+    avg_farm = 2.5
+    farms_needed = max(1, int(coins_needed / avg_farm)) if coins_needed > 0 else 0
     
     text = f"""
-🎮 Добро пожаловать в KMEbot!
+📊 УРОВЕНЬ ИГРОКА
 
 👤 Игрок: {user.first_name}
-💰 Баланс: {user_data['coins']} коинов
+💰 Всего заработано: {total_coins} коинов
+🏆 Уровень: {current_level['name']}
+📈 Прогресс: {progress}%
 📊 Фармов: {user_data['farm_count']}
-🏆 Всего заработано: {user_data['total_farmed']}
-
-📋 ОСНОВНЫЕ КОМАНДЫ:
-/farm - получить коины (раз в {FARM_COOLDOWN}ч)
-/steal @user - украсть {STEAL_AMOUNT} коинов
-/balance - ваш баланс и статистика
-/top - топ игроков
-/shop - магазин товаров
-/inventory - ваши покупки
-/help - помощь
-
-🎯 КОМАНДА КРАЖИ:
-• /steal @username
-• Украсть {STEAL_AMOUNT} коинов
-• Шанс успеха: {STEAL_CHANCE}%
-• КД: {STEAL_COOLDOWN} минут
-
-💎 КАК ПОЛУЧИТЬ КОИНЫ ОТ АДМИНА:
-Админ отвечает на ваше сообщение и пишет:
-/give 100
-    """
+"""
+    
+    if next_level:
+        text += f"""
+🎯 ДО СЛЕДУЮЩЕГО УРОВНЯ:
+{next_level['name']}
+💰 Нужно коинов: {coins_needed}
+🔄 Примерно фармов: {farms_needed}
+⏰ При {FARM_COOLDOWN}ч КД: ~{farms_needed * FARM_COOLDOWN} часов
+"""
+    else:
+        text += """
+🎉 ВЫ ДОСТИГЛИ МАКСИМАЛЬНОГО УРОВНЯ!
+🔥 Теперь вы Божество KMEbot!
+"""
+    
+    text += "\n📋 СИСТЕМА УРОВНЕЙ:\n"
+    for level in LEVELS:
+        arrow = "➡️" if level["level"] == current_level["level"] else "  "
+        text += f"{arrow} {level['name']}: {level['min_coins']}-{level['max_coins'] if level['max_coins'] < 1000000 else '∞'} коинов\n"
+    
     await update.message.reply_text(text)
 
-async def farm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = str(user.id)
-    
-    can_farm, msg = db.can_farm(user_id)
-    if not can_farm:
-        await update.message.reply_text(msg)
-        return
-    
-    coins = random.randint(1, 5)
-    bonus_msg = ""
-    emoji = "💰"
-    
-    chance = random.random()
-    if chance < 0.10:
-        coins += 2
-        bonus_msg = f"\n🎉 УДАЧА! +2 коина!"
-        emoji = "🎉"
-    elif chance < 0.18:
-        penalty = random.choice([-1, -2])
-        original = coins
-        coins = max(0, coins + penalty)
-        bonus_msg = f"\n😕 Неудача... -{abs(penalty)} коин ({original} → {coins})"
-        emoji = "😕"
-    
-    new_balance = db.add_coins(user_id, coins)
-    
-    result = f"""
-{emoji} Фарм завершен!
-
-Получено: {coins} коинов{bonus_msg}
-💰 Баланс: {new_balance}
-🏆 Всего: {db.get_user(user_id)['total_farmed']}
-
-⏳ Следующий через {FARM_COOLDOWN}ч
-    """
-    await update.message.reply_text(result)
-
+# ========== ОБНОВЛЁННЫЙ /BALANCE С УРОВНЕМ ==========
 async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = str(user.id)
     user_data = db.get_user(user_id)
     
-    # Время до фарма
+    total_coins = user_data['total_farmed']
+    current_level, next_level, progress, coins_needed = get_level_progress(total_coins)
+    
     farm_timer = ""
     if user_data['last_farm']:
         last = datetime.fromisoformat(user_data['last_farm'])
@@ -677,65 +394,237 @@ async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         farm_timer = "✅ Можно фармить! /farm\n"
     
-    # Время до кражи
-    steal_timer = ""
-    if user_data.get('last_steal'):
-        last = datetime.fromisoformat(user_data['last_steal'])
-        now = datetime.now()
-        cooldown = timedelta(minutes=STEAL_COOLDOWN)
-        if now - last < cooldown:
-            next_steal = last + cooldown
-            wait = next_steal - now
-            minutes = int(wait.total_seconds() // 60)
-            seconds = int(wait.total_seconds() % 60)
-            steal_timer = f"⏳ До кражи: {minutes:02d}:{seconds:02d}\n"
-        else:
-            steal_timer = "✅ Можно красть! /steal @user\n"
-    else:
-        steal_timer = "✅ Можно красть! /steal @user\n"
-    
     text = f"""
 👤 Игрок: {user.first_name}
-💰 Коин: {user_data['coins']}
-📊 Фармов: {user_data['farm_count']}
-🏆 Всего: {user_data['total_farmed']}
+💰 Текущие коины: {user_data['coins']}
+🏆 Всего заработано: {total_coins}
+📊 Уровень: {current_level['name']} ({progress}%)
 
-🎯 Статистика кражи:
-✅ Успешно: {user_data['steal_success']}
+🎯 Статистика:
+📈 Фармов: {user_data['farm_count']}
+✅ Успешных краж: {user_data['steal_success']}
 ❌ Провалов: {user_data['steal_failed']}
 💰 Украдено: {user_data['stolen_total']}
 💸 Потеряно: {user_data['lost_total']}
 
-{farm_timer}{steal_timer}🛍️ /shop - магазин
-    """
+{farm_timer}
+📈 Узнать подробнее об уровне: /level
+"""
+    
     await update.message.reply_text(text)
 
-async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not db.data:
-        await update.message.reply_text("📭 Нет игроков!")
+# ========== ОБНОВЛЁННЫЙ /START С УРОВНЯМИ ==========
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_data = db.get_user(user.id)
+    
+    if user.username:
+        user_data['username'] = user.username
+    if user.full_name:
+        user_data['display_name'] = user.full_name
+    db.save_data()
+    
+    total_coins = user_data['total_farmed']
+    current_level, _, progress, _ = get_level_progress(total_coins)
+    
+    chat_type = update.message.chat.type
+    
+    if chat_type in ['group', 'supergroup']:
+        text = f"""
+👋 Привет, {user.first_name}!
+
+📱 Я вижу ты в чате! Зайди ко мне в ЛС для полной регистрации:
+
+1. 📩 Найди меня в списке чатов: @{(await context.bot.get_me()).username}
+2. ✍️ Напиши мне: /start
+3. ✅ Готово! Теперь ты в базе бота
+
+📊 Твой уровень: {current_level['name']} ({progress}%)
+
+🎮 После регистрации в ЛС ты сможешь:
+• 📈 Смотреть свой уровень (/level)
+• 💰 Получать коины от админа
+• 🎯 Искать тиму по MMR (/party (2500))
+• 🛍️ Покупать и обменивать предметы
+
+💬 Пока можешь использовать в чате:
+/farm - фармить коины (0-5 коинов)
+/balance - баланс и уровень
+/shop - магазин
+/party (0-13000) - искать команду
+"""
+    else:
+        text = f"""
+🎮 Добро пожаловать в KMEbot!
+
+✅ Ты успешно зарегистрирован в базе бота!
+
+👤 Игрок: {user.first_name}
+💰 Текущие коины: {user_data['coins']}
+🏆 Всего заработано: {total_coins}
+📊 Уровень: {current_level['name']} ({progress}%)
+
+📋 ОСНОВНЫЕ КОМАНДЫ:
+/farm - получить коины (раз в {FARM_COOLDOWN}ч) 0-5 коинов
+/balance - ваш баланс и статистика
+/level - подробная информация об уровне
+/top - топ игроков
+/shop - магазин товаров
+/inventory - ваши покупки с обменом
+/help - помощь
+/party (0-13000) - искать команду Dota 2
+
+📈 СИСТЕМА УРОВНЕЙ:
+👶 Рекрут - 0-100 коинов
+🛡️ Страж - 101-200 коинов
+⚔️ Рыцарь - 201-300 коинов
+👑 Титян - 301-400 коинов
+🔥 Божество - 401+ коинов
+
+🎮 ПОИСК ТИМЫ DOTA 2:
+• /party (2500) - найдет тиму ~2500 MMR
+• /party (1000-3000) - диапазон MMR
+• /party (5000) - найдет тиму ~5000 MMR
+"""
+    
+    await update.message.reply_text(text)
+
+# ========== ОБНОВЛЁННЫЙ /FARM С ПОВЫШЕННЫМ ШАНСОМ МИНУС КОИНА ==========
+async def farm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = str(user.id)
+    
+    can_farm, msg = db.can_farm(user_id)
+    
+    if not can_farm:
+        await update.message.reply_text(msg)
         return
     
-    top_users = sorted(
-        db.data.items(),
-        key=lambda x: x[1]['total_farmed'],
-        reverse=True
-    )[:5]
+    coins = random.randint(0, 5)
+    bonus_msg = ""
+    emoji = "💰"
     
-    text = "🏆 ТОП 5 ИГРОКОВ 🏆\n\n"
+    chance = random.random()
     
-    for i, (user_id, user_data) in enumerate(top_users, 1):
-        username = user_data.get('username', '')
-        if username:
-            name = f"@{username}"
+    # ПОВЫШЕННЫЙ ШАНС МИНУС КОИНА ДО 10%
+    if chance < 0.10:  # 10% шанс удачи
+        bonus = 2
+        coins += bonus
+        bonus_msg = f"\n🎉 УДАЧА! +{bonus} коина!"
+        emoji = "🎉"
+    elif chance < 0.20:  # 10% шанс неудачи (увеличен с 8% до 10%)
+        penalty = random.choice([-1, -2])
+        original_coins = coins
+        coins = max(0, coins + penalty)
+        if penalty == -1:
+            bonus_msg = f"\n😕 Неудача... -1 коин ({original_coins} → {coins})"
+            emoji = "😕"
         else:
-            name = user_data.get('display_name', f"ID:{user_id[:6]}")
+            bonus_msg = f"\n😞 Печаль... -2 коина ({original_coins} → {coins})"
+            emoji = "😞"
+    
+    old_balance = db.get_user(user_id)['total_farmed']
+    new_balance = db.add_coins(user_id, coins)
+    
+    old_level = get_user_level(old_balance)
+    new_level = get_user_level(new_balance)
+    
+    level_up_msg = ""
+    if old_level['level'] < new_level['level']:
+        level_up_msg = f"\n\n🎊 УРОВЕНЬ ПОВЫШЕН! Теперь ты {new_level['name']}!"
+    
+    result = f"""
+{emoji} Фарм завершен!
+
+Получено: {coins} коинов{bonus_msg}
+💰 Баланс: {db.get_user(user_id)['coins']}
+🏆 Всего: {new_balance}
+📊 Уровень: {new_level['name']}{level_up_msg}
+
+⏳ Следующий через {FARM_COOLDOWN}ч
+"""
+    
+    if coins == 0:
+        result += "\n💡 Не расстраивайся! Пиши /level чтобы увидеть прогресс!"
+    
+    await update.message.reply_text(result)
+
+# ========== КОМАНДА ПОКУПКИ ПРЕДМЕТА ==========
+async def buy_item_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int):
+    """Покупка предмета из магазина"""
+    user = update.effective_user
+    user_id = str(user.id)
+    
+    success, result = db.buy_item(user_id, item_id)
+    
+    if success:
+        item_name = SHOP_ITEMS[item_id]["name"]
+        item_price = SHOP_ITEMS[item_id]["price"]
+        user_data = db.get_user(user_id)
         
-        coins = user_data['total_farmed']
-        medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i-1]
-        text += f"{medal} {name}: {coins} коинов\n"
+        text = f"""
+✅ ПОКУПКА УСПЕШНА!
+
+🎁 Предмет: {item_name}
+💰 Стоимость: {item_price} коинов
+💳 Баланс: {user_data['coins']} коинов
+
+📦 Предмет добавлен в инвентарь!
+🔄 Обменять: /inventory
+🛍️ Купить ещё: /shop
+"""
+        
+        # Если предмет обмениваемый, показываем инструкцию
+        if SHOP_ITEMS[item_id]["exchangeable"]:
+            text += "\n⚠️ ВАЖНО: Для обмена предмета:\n1. Откройте /inventory\n2. Нажмите на предмет\n3. Подтвердите обмен\n4. Админ получит уведомление!"
+    else:
+        text = result
     
     await update.message.reply_text(text)
 
+# ========== КОМАНДА ИНВЕНТАРЯ ==========
+async def inventory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = str(user.id)
+    user_data = db.get_user(user_id)
+    
+    if not user_data['inventory']:
+        await update.message.reply_text(
+            "📦 Ваш инвентарь пуст\n"
+            "🛍️ Посмотреть товары: /shop\n\n"
+            "💡 Совет: Купите что-нибудь и обменяйте на услугу!"
+        )
+        return
+    
+    keyboard = []
+    
+    for i, item in enumerate(user_data['inventory']):
+        item_name = item['name']
+        bought_date = datetime.fromisoformat(item['bought_at']).strftime("%d.%m")
+        
+        if item.get('exchanged', False):
+            status = f"✅ Обменян {datetime.fromisoformat(item.get('exchanged_at', '')).strftime('%d.%m')}"
+            callback_data = f"inv_view_{i}"
+        elif item.get('exchangeable', True):
+            status = "🔄 ОБМЕНЯТЬ"
+            callback_data = f"inv_exchange_{i}"
+        else:
+            status = "❌ Не обменивается"
+            callback_data = f"inv_view_{i}"
+        
+        keyboard.append([InlineKeyboardButton(
+            f"{i+1}. {item_name} ({bought_date}) - {status}",
+            callback_data=callback_data
+        )])
+    
+    keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="inv_close")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = f"📦 ВАШ ИНВЕНТАРЬ ({len(user_data['inventory'])} предметов)\n🔄 Нажмите на предмет для обмена"
+    await update.message.reply_text(text, reply_markup=reply_markup)
+
+# ========== КОМАНДА МАГАЗИНА ==========
 async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_data = db.get_user(user.id)
@@ -748,139 +637,188 @@ async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"   📝 {item['description']}\n"
         text += f"   🛒 /buy_{item_id}\n\n"
     
+    total_coins = user_data['total_farmed']
+    current_level = get_user_level(total_coins)
+    
     text += f"💰 Ваш баланс: {user_data['coins']} коинов\n"
-    text += "🛒 Для покупки напишите /buy_номер"
+    text += f"🏆 Ваш уровень: {current_level['name']}\n"
+    text += "🔄 Все предметы можно обменять на услуги!"
     
     await update.message.reply_text(text)
 
-async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    command = update.message.text
-    
-    try:
-        item_id = int(command.split('_')[1])
-    except:
-        await update.message.reply_text("❌ Неправильный формат! /buy_номер")
+# ========== КОМАНДА ТОП ==========
+async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not db.data:
+        await update.message.reply_text("📭 Пока нет игроков!")
         return
     
-    success, msg = db.buy_item(str(user.id), item_id)
+    top_users = sorted(
+        db.data.items(),
+        key=lambda x: x[1]['total_farmed'],
+        reverse=True
+    )[:5]
     
-    if success:
-        user_data = db.get_user(str(user.id))
-        msg += f"\n💰 Остаток: {user_data['coins']} коинов"
+    text = "🏆 ТОП 5 ИГРОКОВ ПО УРОВНЮ 🏆\n\n"
     
-    await update.message.reply_text(msg)
-
-async def inventory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_data = db.get_user(str(update.effective_user.id))
+    for i, (user_id, user_data) in enumerate(top_users, 1):
+        username = user_data.get('username', '')
+        if username:
+            name = f"@{username}"
+        else:
+            name = user_data.get('display_name', f"ID:{user_id[:6]}")
+        
+        total_coins = user_data['total_farmed']
+        level = get_user_level(total_coins)
+        medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i-1]
+        
+        text += f"{medal} {name}\n"
+        text += f"   {level['name']} | {total_coins} коинов\n\n"
     
-    if not user_data['inventory']:
-        await update.message.reply_text("📦 Инвентарь пуст\n🛍️ /shop")
-        return
-    
-    text = "📦 ВАШ ИНВЕНТАРЬ\n\n"
-    
-    for i, item in enumerate(user_data['inventory'], 1):
-        date = datetime.fromisoformat(item['bought_at']).strftime("%d.%m")
-        text += f"{i}. {item['name']}\n"
-        text += f"   💰 Цена: {item['price']} коинов\n"
-        text += f"   📝 {item['description']}\n"
-        text += f"   📅 Куплено: {date}\n\n"
-    
-    text += f"📊 Всего покупок: {len(user_data['inventory'])}"
+    text += "📈 Подними свой уровень: /farm и /level"
     await update.message.reply_text(text)
 
+# ========== КОМАНДА ПОМОЩИ ==========
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = f"""
 🆘 ПОМОЩЬ ПО KMEbot
 
+📱 ВАЖНО: Для полного доступа напишите боту /start в ЛС!
+
 📋 ОСНОВНЫЕ КОМАНДЫ:
-/farm - коины каждые {FARM_COOLDOWN}ч
-/steal @user - украсть {STEAL_AMOUNT} коинов
-/balance - ваш баланс и статистика
-/top - топ игроков
+/farm - коины каждые {FARM_COOLDOWN}ч (0-5 коинов)
+/balance - ваш баланс и уровень
+/level - подробная информация об уровне
+/top - топ игроков по уровню
 /shop - магазин товаров
-/inventory - ваши покупки
+/inventory - ваши покупки с обменом
+/party (0-13000) - искать команду Dota 2
 /help - эта справка
 
-🎯 КОМАНДА КРАЖИ:
-• /steal @username
-• Шанс успеха: {STEAL_CHANCE}%
-• КД: {STEAL_COOLDOWN} минут
-• Сумма: {STEAL_AMOUNT} коинов
+📈 СИСТЕМА УРОВНЕЙ:
+👶 Рекрут - 0-100 коинов
+🛡️ Страж - 101-200 коинов
+⚔️ Рыцарь - 201-300 коинов
+👑 Титян - 301-400 коинов
+🔥 Божество - 401+ коинов
 
-🛍️ ТОВАРЫ В МАГАЗИНЕ:
-1. 🔔 Сигна от Kme_Dota - 50 коинов
-2. 👥 Сигна от Лсной братвы - 100 коинов
-3. 👑 Модер в чате - 150 коинов
-4. 🎮 Модер на твиче - 200 коинов
-5. 🎵 Трек про тебя - 300 коинов
-6. ⚔️ Dota+ - 400 коинов
-
-💰 КАК ПОЛУЧИТЬ КОИНЫ ОТ АДМИНА:
-Админ отвечает на ваше сообщение и пишет:
-/give 100
-
-👑 АДМИН-КОМАНДЫ (только для создателя):
-/admin - панель администратора
-/give @user N - выдать коины
-/find @user - найти игрока
-/broadcast текст - рассылка всем
-/delete @user - удалить игрока
+🎮 ПОИСК ТИМЫ DOTA 2:
+/party (2500) - разошлёт всем сообщение о поиске тимы
+/party (1000-3000) - диапазон MMR
+Диапазон MMR: 0-13000
 
 👤 Создатель: {ADMIN_USERNAME}
-    """
+"""
     await update.message.reply_text(text)
 
-# ========== ЗАПУСК БОТА ==========
-def main():
-    print("=" * 50)
-    print("🚀 ЗАПУСК KMEbot v3.0")
-    print("=" * 50)
-    print(f"👥 Игроков: {len(db.data)}")
-    print(f"⏳ Фарм: 1-5 коинов, {FARM_COOLDOWN}ч КД")
-    print(f"🎯 Кража: {STEAL_AMOUNT} коинов, {STEAL_CHANCE}% шанс, {STEAL_COOLDOWN}мин КД")
-    print(f"🛍️ Товаров: {len(SHOP_ITEMS)} (включая Dota+ и Трек)")
-    print(f"👑 Админ ID: {ADMIN_ID}")
-    print("=" * 50)
-    print("✅ ВСЁ РАБОТАЕТ:")
-    print("• /give (ответ на сообщение)")
-    print("• /steal @user")
-    print("• Полная админ-панель /admin")
-    print("=" * 50)
+# ========== ИНВЕНТАРЬ КНОПКИ ОБРАБОТЧИК ==========
+async def inventory_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
     
-    app = Application.builder().token(TOKEN).build()
+    user = query.from_user
+    user_id = str(user.id)
+    data = query.data
     
-    # Основные команды
-    app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(CommandHandler("farm", farm_cmd))
-    app.add_handler(CommandHandler("steal", steal_cmd))
-    app.add_handler(CommandHandler("balance", balance_cmd))
-    app.add_handler(CommandHandler("top", top_cmd))
-    app.add_handler(CommandHandler("shop", shop_cmd))
-    app.add_handler(CommandHandler("inventory", inventory_cmd))
-    app.add_handler(CommandHandler("help", help_cmd))
+    if data == "inv_close":
+        await query.delete_message()
+        return
     
-    # Админ команды
-    app.add_handler(CommandHandler("admin", admin_cmd))
-    app.add_handler(CommandHandler("give", give_cmd))
-    app.add_handler(CommandHandler("find", find_cmd))
-    app.add_handler(CommandHandler("broadcast", broadcast_cmd))
-    app.add_handler(CommandHandler("delete", delete_cmd))
+    elif data.startswith("inv_view_"):
+        item_index = int(data.split("_")[2])
+        user_data = db.get_user(user_id)
+        
+        if item_index >= len(user_data['inventory']):
+            await query.answer("❌ Предмет не найден!", show_alert=True)
+            return
+        
+        item = user_data['inventory'][item_index]
+        bought_date = datetime.fromisoformat(item['bought_at']).strftime("%d.%m.%Y %H:%M")
+        
+        if item.get('exchanged', False):
+            exchanged_date = datetime.fromisoformat(item.get('exchanged_at', '')).strftime("%d.%m.%Y %H:%M")
+            status = f"✅ Обменян: {exchanged_date}"
+        else:
+            status = "🔄 Можно обменять"
+        
+        text = f"📦 {item['name']}\n💰 {item['price']} коинов\n📝 {item['description']}\n📅 {bought_date}\n📊 {status}"
+        await query.edit_message_text(text)
+        return
     
-    # Кнопки админ-панели
-    app.add_handler(CallbackQueryHandler(admin_button_handler, pattern="^admin_"))
-    
-    # Команды покупки
-    for i in range(1, 7):
-        app.add_handler(CommandHandler(f"buy_{i}", buy_cmd))
-    
-    print("✅ Бот запущен!")
-    print("🛑 Ctrl+C для остановки")
-    print("=" * 50)
-    
-    app.run_polling()
+    elif data.startswith("inv_exchange_"):
+        item_index = int(data.split("_")[2])
+        
+        success, result = db.exchange_item(user_id, item_index)
+        
+        if not success:
+            await query.answer(result, show_alert=True)
+            return
+        
+        item = result
+        
+        try:
+            user_name = f"@{user.username}" if user.username else user.full_name
+            item_name = item['name']
+            
+            admin_message = (
+                f"🔔 НОВЫЙ ОБМЕН ПРЕДМЕТА!\n\n"
+                f"🎁 Предмет: {item_name}\n"
+                f"💰 Стоимость: {item['price']} коинов\n"
+                f"👤 Игрок: {user_name} (ID: {user_id})\n"
+                f"🕐 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
+                f"⚠️ Не забудьте выполнить услугу!\n"
+                f"✅ После выполнения удалите предмет:\n"
+                f"/removeitem {user_id} {item_index}"
+            )
+            
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=admin_message
+            )
+        except Exception as e:
+            print(f"Ошибка уведомления админа: {e}")
+        
+        await query.answer(f"✅ {item['name']} отправлен на обмен! Админ получил уведомление.", show_alert=True)
+        
+        # Обновляем сообщение
+        user_data = db.get_user(user_id)
+        
+        if not user_data['inventory']:
+            await query.edit_message_text("📦 Инвентарь пуст\n🛍️ /shop - купить что-то ещё")
+            return
+        
+        keyboard = []
+        for i, inv_item in enumerate(user_data['inventory']):
+            item_name = inv_item['name']
+            bought_date = datetime.fromisoformat(inv_item['bought_at']).strftime("%d.%m")
+            
+            if inv_item.get('exchanged', False):
+                status = f"✅ Обменян {datetime.fromisoformat(inv_item.get('exchanged_at', '')).strftime('%d.%m')}"
+                callback_data = f"inv_view_{i}"
+            elif inv_item.get('exchangeable', True):
+                status = "🔄 ОБМЕНЯТЬ"
+                callback_data = f"inv_exchange_{i}"
+            else:
+                status = "❌ Не обменивается"
+                callback_data = f"inv_view_{i}"
+            
+            keyboard.append([InlineKeyboardButton(
+                f"{i+1}. {item_name} ({bought_date}) - {status}",
+                callback_data=callback_data
+            )])
+        
+        keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="inv_close")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"📦 ВАШ ИНВЕНТАРЬ ({len(user_data['inventory'])} предметов)\n🔄 Нажмите на предмет для обмена",
+            reply_markup=reply_markup
+        )
 
-if __name__ == "__main__":
-    main()
-
+# ========== АДМИН КОМАНДЫ ==========
+async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Панель администратора"""
+    user = update.effective_user
+    
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Эта команда только для администратора!")
+        return
