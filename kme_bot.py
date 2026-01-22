@@ -2,10 +2,7 @@ import json
 import os
 import random
 import asyncio
-import schedule
-import time
 from datetime import datetime, timedelta
-from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 
@@ -17,8 +14,6 @@ STEAL_COOLDOWN = 30
 STEAL_AMOUNT = 10
 STEAL_SUCCESS_CHANCE = 40  # 40% шанс успеха
 STEAL_FAIL_CHANCE = 60     # 60% шанс провала
-REMINDER_INTERVAL = 10     # Минуты между напоминаниями в чатах
-TOP_UPDATE_INTERVAL = 10   # Минуты между обновлениями топа
 
 # Система уровней (5 уровней)
 LEVELS = [
@@ -67,8 +62,6 @@ class Database:
     def __init__(self, filename="kme_data.json"):
         self.filename = filename
         self.data = self.load_data()
-        self.chats_file = "chats_data.json"
-        self.chats_data = self.load_chats_data()
     
     def load_data(self):
         if os.path.exists(self.filename):
@@ -79,22 +72,9 @@ class Database:
                 return {}
         return {}
     
-    def load_chats_data(self):
-        if os.path.exists(self.chats_file):
-            try:
-                with open(self.chats_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except:
-                return {}
-        return {}
-    
     def save_data(self):
         with open(self.filename, 'w', encoding='utf-8') as f:
             json.dump(self.data, f, ensure_ascii=False, indent=2)
-    
-    def save_chats_data(self):
-        with open(self.chats_file, 'w', encoding='utf-8') as f:
-            json.dump(self.chats_data, f, ensure_ascii=False, indent=2)
     
     def get_user(self, user_id):
         user_id = str(user_id)
@@ -113,22 +93,10 @@ class Database:
                 'steal_failed': 0,
                 'stolen_total': 0,
                 'lost_total': 0,
-                'admin_gifted': 0,
-                'last_reminder': None,
-                'last_top_check': None
+                'admin_gifted': 0
             }
             self.save_data()
         return self.data[user_id]
-    
-    def add_chat(self, chat_id, chat_title):
-        chat_id = str(chat_id)
-        if chat_id not in self.chats_data:
-            self.chats_data[chat_id] = {
-                'title': chat_title,
-                'last_reminder': None,
-                'active': True
-            }
-            self.save_chats_data()
     
     def update_total_earned(self, user_id):
         """Обновить общее количество заработанных коинов"""
@@ -418,113 +386,6 @@ db = Database()
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
-# ========== СИСТЕМА НАПОМИНАНИЙ И АВТООБНОВЛЕНИЯ ==========
-async def send_registration_reminder(context: ContextTypes.DEFAULT_TYPE):
-    """Отправка напоминаний о регистрации в чатах"""
-    now = datetime.now()
-    
-    for chat_id, chat_data in db.chats_data.items():
-        if not chat_data.get('active', True):
-            continue
-        
-        last_reminder = chat_data.get('last_reminder')
-        if last_reminder:
-            last_time = datetime.fromisoformat(last_reminder)
-            minutes_passed = (now - last_time).total_seconds() / 60
-            if minutes_passed < REMINDER_INTERVAL:
-                continue
-        
-        try:
-            reminder_text = (
-                f"📢 НАПОМИНАНИЕ ОТ KMEbot!\n\n"
-                f"🎮 Хотите участвовать в экономике чата?\n\n"
-                f"💰 Что дает регистрация:\n"
-                f"• Фарм коинов каждые {FARM_COOLDOWN}ч (/farm)\n"
-                f"• Кража коинов у других игроков (/steal @username)\n"
-                f"• Покупка предметов (/shop)\n"
-                f"• Поиск тимы Dota 2 (/party MMR)\n"
-                f"• Получение коинов от админа\n\n"
-                f"⚡ Чтобы зарегистрироваться:\n"
-                f"1. Перейдите в ЛС бота: @{(await context.bot.get_me()).username}\n"
-                f"2. Напишите /start\n"
-                f"3. Готово! Теперь вы в игре!\n\n"
-                f"🏆 Уже зарегистрированы? Проверьте свой рейтинг: /top"
-            )
-            
-            await context.bot.send_message(
-                chat_id=int(chat_id),
-                text=reminder_text
-            )
-            
-            # Обновляем время последнего напоминания
-            db.chats_data[chat_id]['last_reminder'] = now.isoformat()
-            db.save_chats_data()
-            
-        except Exception as e:
-            print(f"Ошибка отправки напоминания в чат {chat_id}: {e}")
-            # Помечаем чат как неактивный если есть ошибки
-            db.chats_data[chat_id]['active'] = False
-            db.save_chats_data()
-
-async def update_top_in_chats(context: ContextTypes.DEFAULT_TYPE):
-    """Автоматическое обновление топа в чатах"""
-    if not db.data:
-        return
-    
-    # Получаем топ игроков по total_earned
-    top_users = sorted(
-        db.data.items(),
-        key=lambda x: x[1].get('total_earned', 0),
-        reverse=True
-    )[:5]
-    
-    if not top_users:
-        return
-    
-    # Формируем текст топа
-    text = "🔄 АВТООБНОВЛЕНИЕ ТОПА ИГРОКОВ\n⏰ Обновлено: " + datetime.now().strftime("%H:%M") + "\n\n"
-    
-    for i, (user_id, user_data) in enumerate(top_users, 1):
-        username = user_data.get('username', '')
-        if username:
-            name = f"@{username}"
-        else:
-            name = user_data.get('display_name', f"ID:{user_id[:6]}")
-        
-        total_earned = user_data.get('total_earned', 0)
-        level = get_user_level(total_earned)
-        medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i-1]
-        
-        # Статистика игрока для топа
-        stats = []
-        if user_data.get('total_farmed', 0) > 0:
-            stats.append(f"👨‍🌾 {user_data['total_farmed']}")
-        if user_data.get('stolen_total', 0) > 0:
-            stats.append(f"🎭 {user_data['stolen_total']}")
-        if user_data.get('admin_gifted', 0) > 0:
-            stats.append(f"👑 {user_data['admin_gifted']}")
-        
-        stats_text = " | ".join(stats) if stats else "Нет данных"
-        
-        text += f"{medal} {name}\n"
-        text += f"   {level['name']} | Всего: {total_earned} коинов\n"
-        text += f"   📊 {stats_text}\n\n"
-    
-    text += f"📈 Подними свой рейтинг:\n/farm - фарм коинов\n/steal @username - кража коинов\n🕒 Следующее обновление через {TOP_UPDATE_INTERVAL} минут"
-    
-    # Отправляем топ во все активные чаты
-    for chat_id, chat_data in db.chats_data.items():
-        if not chat_data.get('active', True):
-            continue
-        
-        try:
-            await context.bot.send_message(
-                chat_id=int(chat_id),
-                text=text
-            )
-        except Exception as e:
-            print(f"Ошибка отправки топа в чат {chat_id}: {e}")
-
 # ========== КОМАНДА /STEAL (РАЗНЫЕ ВАРИАНТЫ) ==========
 async def steal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Кража коинов (рандомная или у конкретного игрока)"""
@@ -669,8 +530,7 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += "📈 Хотите попасть в топ?\n"
     text += "/farm - фармить коины\n"
     text += "/steal @username - красть у других\n"
-    text += "/level - отслеживать прогресс\n\n"
-    text += f"🔄 Топ обновляется каждые {TOP_UPDATE_INTERVAL} минут"
+    text += "/level - отслеживать прогресс"
     
     await update.message.reply_text(text)
 
@@ -1044,6 +904,73 @@ async def party_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(result)
 
+# ========== КОМАНДА /BROADCAST (ТОЛЬКО ДЛЯ АДМИНА) ==========
+async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Рассылка сообщения всем игрокам"""
+    user = update.effective_user
+    
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Только для админа!")
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "📢 РАССЫЛКА СООБЩЕНИЙ\n\n"
+            "✅ Формат: /broadcast Ваш текст сообщения\n\n"
+            "📝 Примеры:\n"
+            "/broadcast Всем привет! Новый ивент скоро!\n"
+            "/broadcast Обновление бота! Теперь кража {STEAL_SUCCESS_CHANCE}% шанс\n\n"
+            "⚠️ Сообщение будет отправлено ВСЕМ игрокам в базе!\n"
+            "👥 Игроков в базе: " + str(len(db.data))
+        )
+        return
+    
+    message_text = " ".join(context.args)
+    
+    if len(message_text) < 3:
+        await update.message.reply_text("❌ Сообщение слишком короткое!")
+        return
+    
+    total_players = len(db.data)
+    if total_players == 0:
+        await update.message.reply_text("❌ В базе нет игроков!")
+        return
+    
+    admin_name = f"@{user.username}" if user.username else user.first_name
+    
+    full_message = (
+        f"📢 ОБЪЯВЛЕНИЕ ОТ АДМИНИСТРАТОРА\n\n"
+        f"👤 От: {admin_name}\n\n"
+        f"💬 Сообщение:\n{message_text}\n\n"
+        f"🏆 KMEbot | /help - помощь"
+    )
+    
+    await update.message.reply_text(f"📢 Рассылка запущена... Ожидайте итогов!")
+    
+    successful = 0
+    failed = 0
+    
+    for player_id in db.data.keys():
+        try:
+            await context.bot.send_message(
+                chat_id=player_id,
+                text=full_message
+            )
+            successful += 1
+        except:
+            failed += 1
+    
+    result = (
+        f"✅ РАССЫЛКА ЗАВЕРШЕНА!\n\n"
+        f"📊 Статистика:\n"
+        f"✅ Успешно: {successful} игроков\n"
+        f"❌ Не удалось: {failed} игроков\n"
+        f"👥 Всего в базе: {total_players}\n\n"
+        f"💬 Ваше сообщение:\n\"{message_text[:100]}{'...' if len(message_text) > 100 else ''}\""
+    )
+    
+    await update.message.reply_text(result)
+
 # ========== ОСТАЛЬНЫЕ КОМАНДЫ ==========
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1053,13 +980,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data['username'] = user.username
     if user.full_name:
         user_data['display_name'] = user.full_name
-    
-    # Если пользователь в чате, добавляем чат в базу
-    if update.message.chat.type in ['group', 'supergroup']:
-        chat_id = str(update.message.chat.id)
-        chat_title = update.message.chat.title
-        db.add_chat(chat_id, chat_title)
-    
     db.save_data()
     
     total_earned = user_data.get('total_earned', 0)
@@ -1126,7 +1046,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Провал: -{STEAL_AMOUNT} коинов
 
 🏆 ТОП ИГРОКОВ:
-• Обновляется каждые {TOP_UPDATE_INTERVAL} минут
 • Учитывает все доходы: фарм, кража, админ
 • /top - посмотреть текущий рейтинг
 
@@ -1249,7 +1168,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /steal @username - кража коинов у других ({STEAL_SUCCESS_CHANCE}% шанс, {STEAL_COOLDOWN}мин КД)
 /balance - ваш баланс и статистика (админ может ответить на сообщение игрока)
 /level - информация об уровне (админ может ответить на сообщение игрока)
-/top - топ игроков по общему доходу (обновляется каждые {TOP_UPDATE_INTERVAL} мин)
+/top - топ игроков по общему доходу
 /shop - магазин товаров
 /inventory - ваши покупки с обменом
 /party ммр - искать команду Dota 2
@@ -1265,7 +1184,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 🏆 ТОП ИГРОКОВ (/top):
 • Учитывает ВСЕ доходы: фарм + кража + админ
-• Обновляется автоматически каждые {TOP_UPDATE_INTERVAL} минут
 • Показывает детальную статистику каждого игрока
 
 📈 СИСТЕМА УРОВНЕЙ:
@@ -1288,11 +1206,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /broadcast Ваше сообщение - рассылка всем игрокам
 
 👤 Создатель: {ADMIN_USERNAME}
-
-⚡ НАПОМИНАНИЯ:
-• Бот напоминает о регистрации в чатах
-• Топ обновляется автоматически
-• Уровень рассчитывается от общего дохода
 """
     await update.message.reply_text(text)
 
@@ -1415,7 +1328,6 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 👥 Игроков в базе: {len(db.data)}
 💰 Общий оборот: {total_earned_all} коинов
-📊 Активных чатов: {len(db.chats_data)}
 🔄 Предметов куплено: {sum(len(user['inventory']) for user in db.data.values())}
 
 📊 КОМАНДЫ:
@@ -1431,8 +1343,6 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Фарм: 0-5 коинов / {FARM_COOLDOWN}ч
 Кража: {STEAL_AMOUNT} коинов / {STEAL_COOLDOWN}мин
 Шанс кражи: {STEAL_SUCCESS_CHANCE}% успех / {STEAL_FAIL_CHANCE}% провал
-Напоминания: каждые {REMINDER_INTERVAL} минут
-Обновление топа: каждые {TOP_UPDATE_INTERVAL} минут
 
 👤 Админ: {ADMIN_USERNAME}
 """
@@ -1472,7 +1382,6 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 👥 ИГРОКИ:
 Всего: {total_players}
 Активных: {sum(1 for user in db.data.values() if user.get('total_earned', 0) > 0)}
-Чатов: {len(db.chats_data)}
 
 💰 ЭКОНОМИКА:
 Текущие коины: {total_coins}
@@ -1564,108 +1473,7 @@ async def removeitem_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
-# ========== КОМАНДА /BROADCAST (ТОЛЬКО ДЛЯ АДМИНА) ==========
-async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Рассылка сообщения всем игрокам"""
-    user = update.effective_user
-    
-    if not is_admin(user.id):
-        await update.message.reply_text("❌ Только для админа!")
-        return
-    
-    if not context.args:
-        await update.message.reply_text(
-            "📢 РАССЫЛКА СООБЩЕНИЙ\n\n"
-            "✅ Формат: /broadcast Ваш текст сообщения\n\n"
-            "📝 Примеры:\n"
-            "/broadcast Всем привет! Новый ивент скоро!\n"
-            "/broadcast Обновление бота! Теперь кража {STEAL_SUCCESS_CHANCE}% шанс\n\n"
-            "⚠️ Сообщение будет отправлено ВСЕМ игрокам в базе!\n"
-            "👥 Игроков в базе: " + str(len(db.data))
-        )
-        return
-    
-    message_text = " ".join(context.args)
-    
-    if len(message_text) < 3:
-        await update.message.reply_text("❌ Сообщение слишком короткое!")
-        return
-    
-    total_players = len(db.data)
-    if total_players == 0:
-        await update.message.reply_text("❌ В базе нет игроков!")
-        return
-    
-    admin_name = f"@{user.username}" if user.username else user.first_name
-    
-    full_message = (
-        f"📢 ОБЪЯВЛЕНИЕ ОТ АДМИНИСТРАТОРА\n\n"
-        f"👤 От: {admin_name}\n\n"
-        f"💬 Сообщение:\n{message_text}\n\n"
-        f"🏆 KMEbot | /help - помощь"
-    )
-    
-    await update.message.reply_text(f"📢 Рассылка запущена... Ожидайте итогов!")
-    
-    successful = 0
-    failed = 0
-    
-    for player_id in db.data.keys():
-        try:
-            await context.bot.send_message(
-                chat_id=player_id,
-                text=full_message
-            )
-            successful += 1
-        except:
-            failed += 1
-    
-    result = (
-        f"✅ РАССЫЛКА ЗАВЕРШЕНА!\n\n"
-        f"📊 Статистика:\n"
-        f"✅ Успешно: {successful} игроков\n"
-        f"❌ Не удалось: {failed} игроков\n"
-        f"👥 Всего в базе: {total_players}\n\n"
-        f"💬 Ваше сообщение:\n\"{message_text[:100]}{'...' if len(message_text) > 100 else ''}\""
-    )
-    
-    await update.message.reply_text(result)
-
-# ========== ОБРАБОТЧИК ГРУППОВЫХ ЧАТОВ ==========
-async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик сообщений в чатах для регистрации чатов"""
-    if update.message.chat.type in ['group', 'supergroup']:
-        chat_id = str(update.message.chat.id)
-        chat_title = update.message.chat.title
-        db.add_chat(chat_id, chat_title)
-
-# ========== ЗАПУСК БОТА И ПЛАНИРОВЩИКА ==========
-def start_scheduler(application):
-    """Запуск планировщика задач"""
-    import threading
-    
-    def run_scheduler():
-        while True:
-            schedule.run_pending()
-            time.sleep(60)  # Проверяем каждую минуту
-    
-    # Настраиваем задачи
-    schedule.every(REMINDER_INTERVAL).minutes.do(
-        lambda: asyncio.run(send_registration_reminder(application))
-    )
-    
-    schedule.every(TOP_UPDATE_INTERVAL).minutes.do(
-        lambda: asyncio.run(update_top_in_chats(application))
-    )
-    
-    # Запускаем планировщик в отдельном потоке
-    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
-    scheduler_thread.start()
-    
-    print(f"✅ Планировщик запущен!")
-    print(f"   • Напоминания каждые {REMINDER_INTERVAL} минут")
-    print(f"   • Обновление топа каждые {TOP_UPDATE_INTERVAL} минут")
-
+# ========== ЗАПУСК БОТА ==========
 def main():
     print("=" * 60)
     print("🚀 ЗАПУСК KMEbot v7.0 - УЛУЧШЕННАЯ СИСТЕМА")
@@ -1676,8 +1484,6 @@ def main():
     print(f"🎭 Кража: {STEAL_AMOUNT} коинов, {STEAL_COOLDOWN}мин КД")
     print(f"   ✅ Успех: {STEAL_SUCCESS_CHANCE}% | ❌ Провал: {STEAL_FAIL_CHANCE}%")
     print(f"📢 Рассылка: /broadcast для админа")
-    print(f"🔄 Автообновление топа: каждые {TOP_UPDATE_INTERVAL} минут")
-    print(f"🔔 Напоминания: каждые {REMINDER_INTERVAL} минут")
     print(f"🎮 Поиск тимы: /party MMR (0-13000)")
     print(f"🔄 Инвентарь с кнопками обмена")
     print(f"👑 Админ ID: {ADMIN_ID}")
@@ -1696,8 +1502,7 @@ def main():
     print("=" * 60)
     print("🏆 УЛУЧШЕННЫЙ ТОП (/top):")
     print("• Учитывает ВСЕ доходы: фарм + кража + админ")
-    print(f"• Автообновление каждые {TOP_UPDATE_INTERVAL} минут")
-    print("• Детальная статистика каждого игрока")
+    print("• Показывает детальную статистику каждого игрока")
     print("=" * 60)
     
     app = Application.builder().token(TOKEN).build()
@@ -1728,12 +1533,6 @@ def main():
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("removeitem", removeitem_cmd))
-    
-    # Обработчик чатов
-    app.add_handler(MessageHandler(filters.ChatType.GROUPS, chat_handler))
-    
-    # Запускаем планировщик
-    start_scheduler(app)
     
     print("✅ Бот запущен и готов к работе!")
     print("📢 Рассылка: /broadcast Привет всем! - для теста")
