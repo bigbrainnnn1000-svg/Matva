@@ -5,12 +5,12 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 
-TOKEN = "8542959870:AAH7ECRyusZRDiULPWngvcjygQ9smi-cA3E"
+# ⚠️ ПРОВЕРЬ ТОКЕН!
+TOKEN = "8542959870:AAH7ECRyusZRDiULPWngvcjygQ9smi-cA3E"  # Или твой новый токен
 ADMIN_ID = 6443845944
 FARM_COOLDOWN = 4
 COMPENSATION_AMOUNT = 15
 
-# Система уровней
 LEVELS = [
     {"level": 1, "name": "👶 Рекрут", "min_coins": 0, "max_coins": 100},
     {"level": 2, "name": "🛡️ Страж", "min_coins": 101, "max_coins": 200},
@@ -30,30 +30,37 @@ SHOP_ITEMS = {
 
 class Database:
     def __init__(self, filename="kme_data.json"):
-        # Исправленный путь для Bothost
-        self.filename = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+        # Для Bothost используем абсолютный путь
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        self.filename = os.path.join(current_dir, filename)
         self.data = self.load_data()
         print(f"📁 База данных: {self.filename}")
+        print(f"👥 Загружено игроков: {len(self.data)}")
     
     def load_data(self):
         if os.path.exists(self.filename):
             try:
                 with open(self.filename, 'r', encoding='utf-8') as f:
                     return json.load(f)
-            except:
+            except Exception as e:
+                print(f"⚠️ Ошибка загрузки БД: {e}")
                 return {}
+        
+        print("📝 Создаю новую базу данных...")
         return {}
     
     def save_data(self):
         try:
             with open(self.filename, 'w', encoding='utf-8') as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
-        except:
-            print("⚠️ Не удалось сохранить базу данных")
+            print("💾 База данных сохранена")
+        except Exception as e:
+            print(f"❌ Ошибка сохранения БД: {e}")
     
     def get_user(self, user_id):
         user_id = str(user_id)
         if user_id not in self.data:
+            print(f"👤 Новый пользователь: {user_id}")
             self.data[user_id] = {
                 'coins': 0,
                 'last_farm': None,
@@ -78,7 +85,9 @@ class Database:
             return True, "✅ Можно фармить!"
         else:
             wait = (last + timedelta(hours=FARM_COOLDOWN)) - now
-            return False, f"⏳ Ждите {wait.seconds//3600:02d}:{(wait.seconds%3600)//60:02d}"
+            hours = wait.seconds // 3600
+            minutes = (wait.seconds % 3600) // 60
+            return False, f"⏳ Ждите {hours:02d}:{minutes:02d}"
     
     def add_coins(self, user_id, amount, from_farm=True, from_admin=False):
         user = self.get_user(user_id)
@@ -99,7 +108,7 @@ class Database:
         
         item = SHOP_ITEMS[item_id]
         if user['coins'] < item['price']:
-            return False, f"❌ Недостаточно коинов!"
+            return False, f"❌ Недостаточно коинов! Нужно {item['price']}, есть {user['coins']}"
         
         user['coins'] -= item['price']
         user['inventory'].append({
@@ -141,12 +150,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = db.get_user(user.id)
     if user.username:
         user_data['username'] = user.username
+    if user.full_name:
+        user_data['display_name'] = user.full_name
     db.save_data()
     
     await update.message.reply_text(
         f"👋 Привет, {user.first_name}!\n"
         f"💰 Баланс: {user_data['coins']} коинов\n"
-        f"📊 Команды: /farm /balance /shop /help"
+        f"📊 Команды: /farm /balance /level /shop /help"
     )
 
 async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -175,6 +186,27 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💰 Коинсы: {user_data['coins']}\n"
         f"🏆 Всего: {user_data['total_farmed']}\n"
         f"📈 Фармов: {user_data['farm_count']}"
+    )
+
+async def level(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_data = db.get_user(user.id)
+    
+    # Определяем уровень
+    current_level = None
+    for level in LEVELS:
+        if level["min_coins"] <= user_data['total_farmed'] <= level["max_coins"]:
+            current_level = level
+            break
+    
+    if not current_level:
+        current_level = LEVELS[-1]
+    
+    await update.message.reply_text(
+        f"📊 УРОВЕНЬ\n"
+        f"👤 {user.first_name}\n"
+        f"🏆 {current_level['name']}\n"
+        f"💰 Всего заработано: {user_data['total_farmed']}"
     )
 
 async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -242,7 +274,6 @@ async def party(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mmr = int(context.args[0])
         user = update.effective_user
         
-        # Простая имитация поиска
         await update.message.reply_text(
             f"🎮 Поиск тимы Dota 2\n"
             f"👤 Игрок: {user.first_name}\n"
@@ -304,7 +335,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     for user_id in db.data:
         try:
-            # В реальном боте здесь отправка сообщения
+            await context.bot.send_message(chat_id=user_id, text=text)
             sent += 1
         except:
             pass
@@ -394,21 +425,25 @@ def main():
         ("start", start),
         ("farm", farm),
         ("balance", balance),
+        ("level", level),
         ("shop", shop),
         ("inventory", inventory),
         ("top", top),
         ("party", party),
-        ("help", start),  # Та же справка что и start
+        ("help", start),
     ]
     
     for cmd, handler in commands:
         app.add_handler(CommandHandler(cmd, handler))
     
-    # Покупка предметов
-    for item_id in SHOP_ITEMS.keys():
-        async def buy_handler(update, context, item_id=item_id):
+    # Покупка предметов (исправленная версия)
+    def create_buy_handler(item_id):
+        async def handler(update, context):
             return await buy_item(update, context, item_id)
-        app.add_handler(CommandHandler(f"buy_{item_id}", buy_handler))
+        return handler
+    
+    for item_id in SHOP_ITEMS.keys():
+        app.add_handler(CommandHandler(f"buy_{item_id}", create_buy_handler(item_id)))
     
     # Админ команды
     admin_commands = [
@@ -426,7 +461,8 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     
     print("✅ Бот запущен!")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    print("📱 Напишите боту /start в Telegram")
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
     try:
@@ -434,4 +470,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n🛑 Бот остановлен")
     except Exception as e:
-        print(f"❌ Ошибка: {e}")
+        print(f"❌ Ошибка запуска: {e}")
+        import traceback
+        traceback.print_exc()
