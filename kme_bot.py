@@ -6,7 +6,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 
 # ⚠️ ПРОВЕРЬ ТОКЕН!
-TOKEN = "8542959870:AAH7ECRyusZRDiULPWngvcjygQ9smi-cA3E"  # Или твой новый токен
+TOKEN = "8542959870:AAH7ECRyusZRDiULPWngvcjygQ9smi-cA3E"
 ADMIN_ID = 6443845944
 FARM_COOLDOWN = 4
 COMPENSATION_AMOUNT = 15
@@ -30,7 +30,6 @@ SHOP_ITEMS = {
 
 class Database:
     def __init__(self, filename="kme_data.json"):
-        # Для Bothost используем абсолютный путь
         current_dir = os.path.dirname(os.path.abspath(__file__))
         self.filename = os.path.join(current_dir, filename)
         self.data = self.load_data()
@@ -41,11 +40,15 @@ class Database:
         if os.path.exists(self.filename):
             try:
                 with open(self.filename, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    # Конвертируем старые данные
+                    for user_id, user_data in data.items():
+                        if 'last_active' not in user_data:
+                            user_data['last_active'] = datetime.now().isoformat()
+                    return data
             except Exception as e:
                 print(f"⚠️ Ошибка загрузки БД: {e}")
                 return {}
-        
         print("📝 Создаю новую базу данных...")
         return {}
     
@@ -69,18 +72,31 @@ class Database:
                 'inventory': [],
                 'total_farmed': 0,
                 'farm_count': 0,
-                'admin_gifted': 0
+                'admin_gifted': 0,
+                'last_active': datetime.now().isoformat()
             }
             self.save_data()
         return self.data[user_id]
     
+    def update_user(self, user_id, username="", display_name=""):
+        user = self.get_user(user_id)
+        if username:
+            user['username'] = username
+        if display_name:
+            user['display_name'] = display_name
+        user['last_active'] = datetime.now().isoformat()
+        self.save_data()
+    
     def can_farm(self, user_id):
         user = self.get_user(user_id)
+        user['last_active'] = datetime.now().isoformat()
+        
         if not user['last_farm']:
             return True, "✅ Можно фармить!"
         
         last = datetime.fromisoformat(user['last_farm'])
         now = datetime.now()
+        
         if now - last >= timedelta(hours=FARM_COOLDOWN):
             return True, "✅ Можно фармить!"
         else:
@@ -98,11 +114,14 @@ class Database:
             user['last_farm'] = datetime.now().isoformat()
         if from_admin:
             user['admin_gifted'] += amount
+        user['last_active'] = datetime.now().isoformat()
         self.save_data()
         return user['coins']
     
     def buy_item(self, user_id, item_id):
         user = self.get_user(user_id)
+        user['last_active'] = datetime.now().isoformat()
+        
         if item_id not in SHOP_ITEMS:
             return False, "❌ Такого товара нет!"
         
@@ -123,6 +142,8 @@ class Database:
     
     def exchange_item(self, user_id, item_index):
         user = self.get_user(user_id)
+        user['last_active'] = datetime.now().isoformat()
+        
         if item_index >= len(user['inventory']):
             return False, "❌ Такого предмета нет!"
         
@@ -148,21 +169,39 @@ class Database:
         for user_id in self.data:
             user = self.get_user(user_id)
             user['coins'] += amount
+            user['last_active'] = datetime.now().isoformat()
         self.save_data()
         return len(self.data)
+    
+    def get_user_level(self, total_coins):
+        for level in LEVELS:
+            if level["min_coins"] <= total_coins <= level["max_coins"]:
+                return level
+        return LEVELS[-1]
+    
+    def search_users(self, search_term):
+        """Поиск пользователей по username или display_name"""
+        results = []
+        search_term = search_term.lower()
+        
+        for user_id, user_data in self.data.items():
+            username = user_data.get('username', '').lower()
+            display_name = user_data.get('display_name', '').lower()
+            
+            if search_term in username or search_term in display_name:
+                results.append((user_id, user_data))
+        
+        return results
 
 db = Database()
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 async def send_exchange_notification(context, user_id, item):
-    """Отправляет уведомление админу об обмене"""
     user_data = db.get_user(user_id)
     
-    # Получаем информацию о пользователе
     user_name = f"@{user_data.get('username', '')}" if user_data.get('username') else f"ID:{user_id}"
     display_name = user_data.get('display_name', 'Неизвестно')
     
-    # Формируем сообщение
     message = (
         f"🔔 НОВЫЙ ОБМЕН ПРЕДМЕТА!\n\n"
         f"🎁 Предмет: {item['name']}\n"
@@ -181,92 +220,227 @@ async def send_exchange_notification(context, user_id, item):
     except Exception as e:
         print(f"❌ Ошибка отправки уведомления админу: {e}")
 
-# ========== КОМАНДЫ ==========
+async def send_party_announcement(context, user_id, mmr):
+    user = await context.bot.get_chat(user_id)
+    user_data = db.get_user(user_id)
+    
+    # Получаем уровень игрока
+    level = db.get_user_level(user_data['total_farmed'])
+    
+    message = (
+        "🎮════════════════════════════════════🎮\n\n"
+        f"🔍 <b>НОВЫЙ ИГРОК ИЩЕТ ТИМУ!</b>\n\n"
+        f"👤 <b>Игрок:</b> {user.first_name}\n"
+    )
+    
+    if user.last_name:
+        message += f"👤 <b>Фамилия:</b> {user.last_name}\n"
+    
+    if user.username:
+        message += f"📱 <b>Telegram:</b> @{user.username}\n"
+    
+    message += (
+        f"📊 <b>MMR:</b> <code>{mmr}</code>\n"
+        f"🆔 <b>ID:</b> <code>{user_id}</code>\n\n"
+    )
+    
+    if user_data['display_name']:
+        message += f"📝 <b>Имя в боте:</b> {user_data['display_name']}\n"
+    
+    message += (
+        f"💰 <b>Баланс:</b> {user_data['coins']} коинов\n"
+        f"🏆 <b>Уровень:</b> {level['name']}\n\n"
+        "────────────────────────────────────\n\n"
+        f"💬 <b>Как связаться:</b>\n"
+    )
+    
+    if user.username:
+        message += f"1. 📨 Написать в Telegram: @{user.username}\n"
+        message += f"2. 🤖 Написать в боте: /write {user_id}\n"
+    else:
+        message += f"📨 Написать в боте: /write {user_id}\n"
+    
+    message += "\n🎮════════════════════════════════════🎮"
+    
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=message,
+            parse_mode='HTML'
+        )
+        print(f"📢 Объявление о поиске тимы отправлено: {user_id} (MMR: {mmr})")
+    except Exception as e:
+        print(f"❌ Ошибка отправки объявления: {e}")
+
+# ========== ОСНОВНЫЕ КОМАНДЫ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    db.update_user(user.id, user.username, user.full_name)
     user_data = db.get_user(user.id)
-    if user.username:
-        user_data['username'] = user.username
-    if user.full_name:
-        user_data['display_name'] = user.full_name
-    db.save_data()
     
-    await update.message.reply_text(
-        f"👋 Привет, {user.first_name}!\n"
-        f"💰 Баланс: {user_data['coins']} коинов\n"
-        f"📊 Команды: /farm /balance /level /shop /help"
+    level = db.get_user_level(user_data['total_farmed'])
+    
+    message = (
+        "✨════════════════════════════════════✨\n\n"
+        f"🎮 <b>Добро пожаловать, {user.first_name}!</b>\n\n"
+        f"💰 <b>Баланс:</b> {user_data['coins']} коинов\n"
+        f"🏆 <b>Уровень:</b> {level['name']}\n\n"
+        "📋 <b>Основные команды:</b>\n\n"
+        "• /farm - Фармить коины\n"
+        "• /balance - Ваш баланс\n"
+        "• /level - Ваш уровень\n"
+        "• /shop - Магазин предметов\n"
+        "• /inventory - Ваш инвентарь\n"
+        "• /party [MMR] - Найти тиму\n"
+        "• /top - Топ игроков\n"
+        "• /profile - Ваш профиль\n"
+        "• /users - Поиск игроков\n"
+        "• /help - Помощь\n\n"
+        "✨════════════════════════════════════✨"
     )
+    
+    await update.message.reply_text(message, parse_mode='HTML')
 
 async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    db.update_user(user.id)
     can_farm, msg = db.can_farm(user.id)
     
     if not can_farm:
-        await update.message.reply_text(msg)
+        await update.message.reply_text(f"❌ {msg}")
         return
     
     coins = random.randint(0, 5)
     new_balance = db.add_coins(user.id, coins)
     
-    await update.message.reply_text(
-        f"💰 Фарм: {coins} коинов\n"
-        f"🏦 Баланс: {new_balance}\n"
-        f"⏳ Следующий через {FARM_COOLDOWN}ч"
+    farm_messages = [
+        f"💰 Вы нашли {coins} коинов!",
+        f"🎰 Вам повезло! +{coins} коинов",
+        f"⚡ Быстрый фарм: {coins} коинов",
+        f"💎 Добыто: {coins} коинов",
+        f"🎯 Точно в цель! {coins} коинов"
+    ]
+    
+    message = (
+        "🔄════════════════════════════════════🔄\n\n"
+        f"✅ {random.choice(farm_messages)}\n\n"
+        f"💰 <b>Получено:</b> {coins} коинов\n"
+        f"🏦 <b>Баланс:</b> {new_balance} коинов\n"
+        f"⏰ <b>Следующий фарм:</b> через {FARM_COOLDOWN}ч\n\n"
+        "🔄════════════════════════════════════🔄"
     )
+    
+    await update.message.reply_text(message, parse_mode='HTML')
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    db.update_user(user.id)
     user_data = db.get_user(user.id)
     
-    await update.message.reply_text(
-        f"👤 {user.first_name}\n"
-        f"💰 Коинсы: {user_data['coins']}\n"
-        f"🏆 Всего: {user_data['total_farmed']}\n"
-        f"📈 Фармов: {user_data['farm_count']}"
+    level = db.get_user_level(user_data['total_farmed'])
+    
+    message = (
+        "💰════════════════════════════════════💰\n\n"
+        f"👤 <b>Игрок:</b> {user.first_name}\n\n"
+        f"💳 <b>Коинсы:</b> {user_data['coins']}\n"
+        f"🏆 <b>Всего заработано:</b> {user_data['total_farmed']}\n"
+        f"📈 <b>Уровень:</b> {level['name']}\n"
+        f"🔄 <b>Фармов:</b> {user_data['farm_count']}\n"
+        f"🎁 <b>Подарков от админа:</b> {user_data['admin_gifted']}\n\n"
+        "💰════════════════════════════════════💰"
     )
+    
+    await update.message.reply_text(message, parse_mode='HTML')
 
 async def level(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    db.update_user(user.id)
     user_data = db.get_user(user.id)
     
-    # Определяем уровень
-    current_level = None
-    for level in LEVELS:
+    current_level = db.get_user_level(user_data['total_farmed'])
+    
+    # Находим следующий уровень
+    next_level = None
+    for i, level in enumerate(LEVELS):
         if level["min_coins"] <= user_data['total_farmed'] <= level["max_coins"]:
-            current_level = level
+            if i + 1 < len(LEVELS):
+                next_level = LEVELS[i + 1]
             break
     
-    if not current_level:
-        current_level = LEVELS[-1]
-    
-    await update.message.reply_text(
-        f"📊 УРОВЕНЬ\n"
-        f"👤 {user.first_name}\n"
-        f"🏆 {current_level['name']}\n"
-        f"💰 Всего заработано: {user_data['total_farmed']}"
+    message = (
+        "🏆════════════════════════════════════🏆\n\n"
+        f"👤 <b>Игрок:</b> {user.first_name}\n"
+        f"🎯 <b>Текущий уровень:</b> {current_level['name']}\n"
+        f"💰 <b>Всего заработано:</b> {user_data['total_farmed']} коинов\n\n"
     )
+    
+    if next_level:
+        need = next_level['min_coins'] - user_data['total_farmed']
+        message += f"📈 <b>До следующего уровня:</b> {need} коинов\n\n"
+    
+    message += "🏆════════════════════════════════════🏆"
+    
+    await update.message.reply_text(message, parse_mode='HTML')
 
 async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "🛍️ МАГАЗИН:\n\n"
-    for item_id, item in SHOP_ITEMS.items():
-        text += f"{item_id}. {item['name']} - {item['price']} коинов\n"
-        text += f"   /buy_{item_id}\n\n"
+    user = update.effective_user
+    db.update_user(user.id)
+    user_data = db.get_user(user.id)
     
-    user_data = db.get_user(update.effective_user.id)
-    text += f"💰 Ваш баланс: {user_data['coins']} коинов"
-    await update.message.reply_text(text)
+    message = (
+        "🛍️════════════════════════════════════🛍️\n\n"
+        f"🏪 <b>МАГАЗИН ПРЕДМЕТОВ</b>\n\n"
+    )
+    
+    for item_id, item in SHOP_ITEMS.items():
+        message += (
+            f"{item_id}. <b>{item['name']}</b>\n"
+            f"   💰 Цена: {item['price']} коинов\n"
+            f"   📝 {item['description']}\n"
+            f"   🛒 <code>/buy_{item_id}</code>\n\n"
+        )
+    
+    message += (
+        f"💵 <b>Ваш баланс:</b> {user_data['coins']} коинов\n\n"
+        "🛍️════════════════════════════════════🛍️"
+    )
+    
+    await update.message.reply_text(message, parse_mode='HTML')
 
 async def buy_item(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int):
     user = update.effective_user
+    db.update_user(user.id)
     success, result = db.buy_item(user.id, item_id)
-    await update.message.reply_text(result)
+    
+    user_data = db.get_user(user.id)
+    
+    if success:
+        message = (
+            "🎉════════════════════════════════════🎉\n\n"
+            f"✅ <b>ПОКУПКА УСПЕШНА!</b>\n\n"
+            f"🎁 <b>Предмет:</b> {result}\n"
+            f"💳 <b>Новый баланс:</b> {user_data['coins']} коинов\n\n"
+            f"📦 Предмет добавлен в инвентарь\n"
+            f"🔧 Используйте /inventory чтобы обменять\n\n"
+            "🎉════════════════════════════════════🎉"
+        )
+        await update.message.reply_text(message, parse_mode='HTML')
+    else:
+        await update.message.reply_text(f"❌ {result}")
 
 async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    db.update_user(user.id)
     user_data = db.get_user(user.id)
     
     if not user_data['inventory']:
-        await update.message.reply_text("📦 Инвентарь пуст")
+        message = (
+            "📦════════════════════════════════════📦\n\n"
+            f"🗑️ <b>Инвентарь пуст</b>\n\n"
+            f"🛍️ Зайдите в магазин /shop\n\n"
+            "📦════════════════════════════════════📦"
+        )
+        await update.message.reply_text(message, parse_mode='HTML')
         return
     
     keyboard = []
@@ -283,9 +457,19 @@ async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard.append([InlineKeyboardButton("❌ Закрыть", callback_data="close")])
     
+    message = (
+        "📦════════════════════════════════════📦\n\n"
+        f"🎒 <b>ВАШ ИНВЕНТАРЬ</b>\n\n"
+        f"👤 <b>Игрок:</b> {user.first_name}\n"
+        f"📊 <b>Предметов:</b> {len(user_data['inventory'])}\n\n"
+        f"💡 Нажмите на предмет для обмена\n\n"
+        "📦════════════════════════════════════📦"
+    )
+    
     await update.message.reply_text(
-        "📦 ИНВЕНТАРЬ:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        message,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='HTML'
     )
 
 async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -293,53 +477,262 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 Нет игроков")
         return
     
-    top_users = sorted(db.data.items(), key=lambda x: x[1]['total_farmed'], reverse=True)[:5]
-    text = "🏆 ТОП 5:\n\n"
+    top_users = sorted(db.data.items(), key=lambda x: x[1]['total_farmed'], reverse=True)[:10]
     
-    for i, (user_id, user_data) in enumerate(top_users, 1):
-        name = f"@{user_data.get('username', '')}" if user_data.get('username') else f"ID:{user_id[:6]}"
-        text += f"{i}. {name} - {user_data['total_farmed']} коинов\n"
+    message = (
+        "🏆════════════════════════════════════🏆\n\n"
+        f"👑 <b>ТОП-10 ИГРОКОВ</b>\n\n"
+    )
     
-    await update.message.reply_text(text)
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+    
+    for i, (user_id, user_data) in enumerate(top_users):
+        if i < len(medals):
+            medal = medals[i]
+        else:
+            medal = f"{i+1}."
+        
+        # Определяем имя для отображения
+        if user_data.get('username'):
+            name = f"@{user_data['username']}"
+        elif user_data.get('display_name'):
+            name = user_data['display_name'][:15]
+            if len(user_data['display_name']) > 15:
+                name += "..."
+        else:
+            name = f"ID:{user_id[:6]}"
+        
+        # Получаем уровень игрока
+        level = db.get_user_level(user_data['total_farmed'])
+        
+        message += (
+            f"{medal} <b>{name}</b>\n"
+            f"   💰 {user_data['total_farmed']} коинов | {level['name']}\n"
+        )
+        
+        if i < len(top_users) - 1:
+            message += "\n"
+    
+    message += "\n🏆════════════════════════════════════🏆"
+    
+    await update.message.reply_text(message, parse_mode='HTML')
 
 async def party(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда поиска тимы - публикуется как объявление"""
+    user = update.effective_user
+    db.update_user(user.id)
+    
     if not context.args:
-        await update.message.reply_text("🎮 Формат: /party [ваш MMR]")
+        message = (
+            "🎮════════════════════════════════════🎮\n\n"
+            f"🎯 <b>ПОИСК ТИМЫ ДЛЯ DOTA 2</b>\n\n"
+            f"📝 <b>Использование:</b>\n"
+            f"<code>/party [ваш MMR]</code>\n\n"
+            f"📋 <b>Пример:</b>\n"
+            f"<code>/party 4500</code>\n\n"
+            f"🎮════════════════════════════════════🎮"
+        )
+        await update.message.reply_text(message, parse_mode='HTML')
         return
     
     try:
         mmr = int(context.args[0])
-        user = update.effective_user
         
-        # Получаем username пользователя
-        user_data = db.get_user(user.id)
-        username = user_data.get('username', '')
+        # Отправляем объявление админу
+        await send_party_announcement(context, user.id, mmr)
         
-        # Формируем красивое объявление
-        announcement = (
-            f"🎮 ОБЪЯВЛЕНИЕ О ПОИСКЕ ТИМЫ\n\n"
-            f"👤 Игрок: {user.first_name}\n"
-            f"📊 MMR: ~{mmr}\n"
+        # Подтверждение игроку
+        message = (
+            "✅════════════════════════════════════✅\n\n"
+            f"🎮 <b>ЗАЯВКА ПРИНЯТА!</b>\n\n"
+            f"👤 <b>Игрок:</b> {user.first_name}\n"
+            f"📊 <b>MMR:</b> {mmr}\n\n"
+            f"📨 Админ получил вашу заявку\n"
+            f"👥 Скоро поможем найти тиму!\n\n"
+            "✅════════════════════════════════════✅"
         )
         
-        if username:
-            announcement += f"📱 Контакт: @{username}\n"
-        
-        announcement += f"🆔 ID: {user.id}\n\n"
-        announcement += f"✅ Ищет тиму для игры в Dota 2!"
-        
-        # Отправляем объявление в тот же чат
-        await update.message.reply_text(announcement)
-        
-        # Также отправляем подтверждение пользователю
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=f"✅ Ваша заявка на поиск тимы опубликована!\nMMR: {mmr}"
-        )
+        await update.message.reply_text(message, parse_mode='HTML')
         
     except ValueError:
         await update.message.reply_text("❌ Укажите число MMR")
+
+async def write(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    db.update_user(user.id)
+    
+    if len(context.args) < 2:
+        message = (
+            "✍️════════════════════════════════════✍️\n\n"
+            f"📨 <b>НАПИСАТЬ ИГРОКУ</b>\n\n"
+            f"📝 <b>Использование:</b>\n"
+            f"<code>/write [ID_игрока] [сообщение]</code>\n\n"
+            f"📋 <b>Пример:</b>\n"
+            f"<code>/write 6443845944 Привет, ищешь тиму?</code>\n\n"
+            "✍️════════════════════════════════════✍️"
+        )
+        await update.message.reply_text(message, parse_mode='HTML')
+        return
+    
+    try:
+        target_id = int(context.args[0])
+        message_text = " ".join(context.args[1:])
+        
+        # Формируем сообщение для получателя
+        receiver_message = (
+            "📨════════════════════════════════════📨\n\n"
+            f"💌 <b>ВАМ ПРИШЛО СООБЩЕНИЕ!</b>\n\n"
+            f"👤 <b>От:</b> {user.first_name}\n"
+        )
+        
+        if user.username:
+            receiver_message += f"📱 <b>Telegram:</b> @{user.username}\n"
+        
+        receiver_message += f"🆔 <b>ID:</b> {user.id}\n\n"
+        receiver_message += f"💬 <b>Сообщение:</b>\n<code>{message_text}</code>\n\n"
+        receiver_message += "📨════════════════════════════════════📨"
+        
+        # Пытаемся отправить сообщение
+        try:
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=receiver_message,
+                parse_mode='HTML'
+            )
+            
+            # Подтверждение отправителю
+            confirmation = (
+                "✅════════════════════════════════════✅\n\n"
+                f"📨 <b>СООБЩЕНИЕ ОТПРАВЛЕНО!</b>\n\n"
+                f"👤 <b>Игроку с ID:</b> {target_id}\n"
+                f"💬 <b>Ваше сообщение:</b>\n<code>{message_text}</code>\n\n"
+                "✅════════════════════════════════════✅"
+            )
+            
+            await update.message.reply_text(confirmation, parse_mode='HTML')
+            
+        except Exception as e:
+            await update.message.reply_text(
+                f"❌ Не удалось отправить сообщение. Игрок может заблокировать бота."
+            )
+            
+    except ValueError:
+        await update.message.reply_text("❌ ID должен быть числом")
+
+async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    db.update_user(user.id)
+    user_data = db.get_user(user.id)
+    level = db.get_user_level(user_data['total_farmed'])
+    
+    # Считаем активность
+    last_active = datetime.fromisoformat(user_data['last_active'])
+    hours_ago = (datetime.now() - last_active).seconds // 3600
+    
+    message = (
+        "👤════════════════════════════════════👤\n\n"
+        f"📋 <b>ПРОФИЛЬ ИГРОКА</b>\n\n"
+        f"👤 <b>Имя:</b> {user.first_name}\n"
+    )
+    
+    if user.username:
+        message += f"📱 <b>Telegram:</b> @{user.username}\n"
+    
+    if user_data['display_name']:
+        message += f"📝 <b>Имя в боте:</b> {user_data['display_name']}\n"
+    
+    message += (
+        f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
+        f"⏰ <b>Был активен:</b> {hours_ago} ч. назад\n\n"
+        f"💰 <b>Баланс:</b> {user_data['coins']} коинов\n"
+        f"🏆 <b>Уровень:</b> {level['name']}\n"
+        f"📈 <b>Всего заработано:</b> {user_data['total_farmed']} коинов\n"
+        f"🔄 <b>Фармов:</b> {user_data['farm_count']}\n"
+        f"📦 <b>Предметов в инвентаре:</b> {len(user_data['inventory'])}\n\n"
+        "👤════════════════════════════════════👤"
+    )
+    
+    await update.message.reply_text(message, parse_mode='HTML')
+
+async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Поиск пользователей"""
+    user = update.effective_user
+    db.update_user(user.id)
+    
+    if not context.args:
+        # Показываем статистику по пользователям
+        total_users = len(db.data)
+        active_today = 0
+        
+        for user_data in db.data.values():
+            last_active = datetime.fromisoformat(user_data['last_active'])
+            if (datetime.now() - last_active).days == 0:
+                active_today += 1
+        
+        message = (
+            "👥════════════════════════════════════👥\n\n"
+            f"📊 <b>СТАТИСТИКА ПОЛЬЗОВАТЕЛЕЙ</b>\n\n"
+            f"👥 <b>Всего игроков:</b> {total_users}\n"
+            f"🟢 <b>Активных сегодня:</b> {active_today}\n\n"
+            f"🔍 <b>Поиск игроков:</b>\n"
+            f"<code>/users [имя или username]</code>\n\n"
+            f"📋 <b>Пример:</b>\n"
+            f"<code>/users matvei</code>\n"
+            f"<code>/users @username</code>\n\n"
+            "👥════════════════════════════════════👥"
+        )
+        
+        await update.message.reply_text(message, parse_mode='HTML')
+        return
+    
+    search_term = " ".join(context.args)
+    results = db.search_users(search_term)
+    
+    if not results:
+        message = (
+            "🔍════════════════════════════════════🔍\n\n"
+            f"❌ <b>НИЧЕГО НЕ НАЙДЕНО</b>\n\n"
+            f"🔍 <b>Поиск:</b> {search_term}\n\n"
+            f"💡 Попробуйте другое имя или username\n\n"
+            "🔍════════════════════════════════════🔍"
+        )
+        await update.message.reply_text(message, parse_mode='HTML')
+        return
+    
+    message = (
+        "🔍════════════════════════════════════🔍\n\n"
+        f"✅ <b>НАЙДЕНО {len(results)} ИГРОКОВ</b>\n\n"
+        f"🔍 <b>Поиск:</b> {search_term}\n\n"
+    )
+    
+    for i, (user_id, user_data) in enumerate(results[:10], 1):
+        # Определяем имя для отображения
+        if user_data.get('username'):
+            name = f"@{user_data['username']}"
+        elif user_data.get('display_name'):
+            name = user_data['display_name'][:15]
+            if len(user_data['display_name']) > 15:
+                name += "..."
+        else:
+            name = f"ID:{user_id[:6]}"
+        
+        # Получаем уровень игрока
+        level = db.get_user_level(user_data['total_farmed'])
+        
+        message += (
+            f"{i}. <b>{name}</b>\n"
+            f"   🆔 ID: <code>{user_id}</code>\n"
+            f"   💰 {user_data['coins']} коинов | {level['name']}\n"
+        )
+        
+        if i < min(len(results), 10):
+            message += "\n"
+    
+    if len(results) > 10:
+        message += f"\n📄 ... и еще {len(results) - 10} игроков\n"
+    
+    message += "\n🔍════════════════════════════════════🔍"
+    
+    await update.message.reply_text(message, parse_mode='HTML')
 
 # ========== АДМИН КОМАНДЫ ==========
 def is_admin(user_id):
@@ -351,7 +744,17 @@ async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not update.message.reply_to_message or not context.args:
-        await update.message.reply_text("❌ Ответьте на сообщение: /give [сумма]")
+        message = (
+            "💰════════════════════════════════════💰\n\n"
+            f"🎁 <b>ВЫДАЧА КОИНОВ</b>\n\n"
+            f"📝 <b>Использование:</b>\n"
+            f"1. Ответьте на сообщение игрока\n"
+            f"2. Напишите: <code>/give [сумма]</code>\n\n"
+            f"📋 <b>Пример:</b>\n"
+            f"<code>/give 100</code>\n\n"
+            "💰════════════════════════════════════💰"
+        )
+        await update.message.reply_text(message, parse_mode='HTML')
         return
     
     try:
@@ -359,13 +762,19 @@ async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_user = update.message.reply_to_message.from_user
         new_balance = db.add_coins(target_user.id, amount, from_farm=False, from_admin=True)
         
-        await update.message.reply_text(
-            f"✅ Выдано {amount} коинов\n"
-            f"👤 Игроку: {target_user.first_name}\n"
-            f"💰 Новый баланс: {new_balance}"
+        message = (
+            "✅════════════════════════════════════✅\n\n"
+            f"🎁 <b>КОИНЫ ВЫДАНЫ!</b>\n\n"
+            f"👤 <b>Игроку:</b> {target_user.first_name}\n"
+            f"💰 <b>Сумма:</b> {amount} коинов\n"
+            f"💳 <b>Новый баланс:</b> {new_balance} коинов\n\n"
+            "✅════════════════════════════════════✅"
         )
+        
+        await update.message.reply_text(message, parse_mode='HTML')
+        
     except:
-        await update.message.reply_text("❌ Ошибка!")
+        await update.message.reply_text("❌ Ошибка! Укажите число")
 
 async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -377,7 +786,13 @@ async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     text = " ".join(context.args)
-    await update.message.reply_text(f"📢 ОБЪЯВЛЕНИЕ:\n\n{text}")
+    message = (
+        "📢════════════════════════════════════📢\n\n"
+        f"📣 <b>ОБЪЯВЛЕНИЕ ОТ АДМИНА</b>\n\n"
+        f"{text}\n\n"
+        "📢════════════════════════════════════📢"
+    )
+    await update.message.reply_text(message, parse_mode='HTML')
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -389,16 +804,36 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     text = " ".join(context.args)
+    message = (
+        "📨════════════════════════════════════📨\n\n"
+        f"📣 <b>СООБЩЕНИЕ ОТ АДМИНА</b>\n\n"
+        f"{text}\n\n"
+        "📨════════════════════════════════════📨"
+    )
+    
     sent = 0
+    failed = 0
     
     for user_id in db.data:
         try:
-            await context.bot.send_message(chat_id=user_id, text=text)
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=message,
+                parse_mode='HTML'
+            )
             sent += 1
         except:
-            pass
+            failed += 1
     
-    await update.message.reply_text(f"📢 Разослано {sent} игрокам")
+    result = (
+        "📊════════════════════════════════════📊\n\n"
+        f"📨 <b>РАССЫЛКА ЗАВЕРШЕНА</b>\n\n"
+        f"✅ <b>Отправлено:</b> {sent} игрокам\n"
+        f"❌ <b>Не отправлено:</b> {failed} игрокам\n\n"
+        "📊════════════════════════════════════📊"
+    )
+    
+    await update.message.reply_text(result, parse_mode='HTML')
 
 async def compensation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -407,20 +842,33 @@ async def compensation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     total = db.add_compensation_to_all(COMPENSATION_AMOUNT)
     
-    await update.message.reply_text(
-        f"💰 Компенсация выдана!\n"
-        f"👥 Игроков: {total}\n"
-        f"🎁 Каждому: {COMPENSATION_AMOUNT} коинов"
+    message = (
+        "🎁════════════════════════════════════🎁\n\n"
+        f"💰 <b>КОМПЕНСАЦИЯ ВЫДАНА!</b>\n\n"
+        f"👥 <b>Игроков:</b> {total}\n"
+        f"🎁 <b>Каждому:</b> {COMPENSATION_AMOUNT} коинов\n"
+        f"💰 <b>Всего выдано:</b> {total * COMPENSATION_AMOUNT} коинов\n\n"
+        "🎁════════════════════════════════════🎁"
     )
+    
+    await update.message.reply_text(message, parse_mode='HTML')
 
 async def removeitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Удаляет обменянный предмет (только для админа)"""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Только для админа!")
         return
     
     if len(context.args) != 2:
-        await update.message.reply_text("❌ Формат: /removeitem [user_id] [item_index]")
+        message = (
+            "🗑️════════════════════════════════════🗑️\n\n"
+            f"❌ <b>УДАЛЕНИЕ ПРЕДМЕТА</b>\n\n"
+            f"📝 <b>Использование:</b>\n"
+            f"<code>/removeitem [ID_игрока] [номер_предмета]</code>\n\n"
+            f"📋 <b>Пример:</b>\n"
+            f"<code>/removeitem 6443845944 0</code>\n\n"
+            "🗑️════════════════════════════════════🗑️"
+        )
+        await update.message.reply_text(message, parse_mode='HTML')
         return
     
     try:
@@ -433,21 +881,39 @@ async def removeitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data = db.get_user(user_id)
             user_name = f"@{user_data.get('username', '')}" if user_data.get('username') else f"ID:{user_id}"
             
-            await update.message.reply_text(
-                f"✅ Предмет удален!\n"
-                f"🎁 {item['name']}\n"
-                f"👤 От игрока: {user_name}"
+            message = (
+                "✅════════════════════════════════════✅\n\n"
+                f"🗑️ <b>ПРЕДМЕТ УДАЛЕН!</b>\n\n"
+                f"🎁 <b>Предмет:</b> {item['name']}\n"
+                f"👤 <b>От игрока:</b> {user_name}\n"
+                f"💰 <b>Стоимость:</b> {item['price']} коинов\n\n"
+                "✅════════════════════════════════════✅"
             )
+            
+            await update.message.reply_text(message, parse_mode='HTML')
         else:
             await update.message.reply_text("❌ Не удалось удалить предмет")
             
     except (ValueError, IndexError):
-        await update.message.reply_text("❌ Ошибка! Проверьте ID и индекс")
+        await update.message.reply_text("❌ Ошибка! Проверьте ID и номер предмета")
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Только для админа!")
         return
+    
+    total_players = len(db.data)
+    total_coins = sum(user['coins'] for user in db.data.values())
+    total_items = sum(len(user['inventory']) for user in db.data.values())
+    
+    message = (
+        "👑════════════════════════════════════👑\n\n"
+        f"⚙️ <b>АДМИН ПАНЕЛЬ</b>\n\n"
+        f"📊 <b>Статистика:</b>\n"
+        f"👥 Игроков: {total_players}\n"
+        f"💰 Всего коинов: {total_coins}\n"
+        f"📦 Предметов: {total_items}\n\n"
+    )
     
     keyboard = [
         [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
@@ -457,8 +923,9 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     
     await update.message.reply_text(
-        "👑 АДМИН ПАНЕЛЬ:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        message,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='HTML'
     )
 
 # ========== ОБРАБОТЧИКИ КНОПОК ==========
@@ -470,48 +937,62 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.delete_message()
         return
     
-    # Обработка инвентаря
     if query.data.startswith("view_"):
         await query.edit_message_text("✅ Предмет уже обменян")
     
     elif query.data.startswith("exchange_"):
         item_index = int(query.data.split("_")[1])
         user = query.from_user
+        db.update_user(user.id)
         success, item = db.exchange_item(user.id, item_index)
         
         if success:
-            # Обновляем сообщение
-            await query.edit_message_text(f"🔄 {item['name']} отправлен на обмен!")
+            message = (
+                "🔄════════════════════════════════════🔄\n\n"
+                f"✅ <b>ПРЕДМЕТ ОТПРАВЛЕН НА ОБМЕН!</b>\n\n"
+                f"🎁 <b>Предмет:</b> {item['name']}\n"
+                f"💰 <b>Стоимость:</b> {item['price']} коинов\n\n"
+                f"📨 Админ получил уведомление\n"
+                f"⏳ Скоро свяжемся для выполнения\n\n"
+                "🔄════════════════════════════════════🔄"
+            )
+            
+            await query.edit_message_text(message, parse_mode='HTML')
             
             # Отправляем уведомление админу
             await send_exchange_notification(context, user.id, item)
             
-            # Отправляем подтверждение пользователю в ЛС
-            try:
-                await context.bot.send_message(
-                    chat_id=user.id,
-                    text=f"✅ Ваш предмет '{item['name']}' отправлен на обмен!\n"
-                         f"С вами свяжется администратор для выполнения услуги."
-                )
-            except:
-                pass  # Пользователь может заблокировать бота
-            
         else:
             await query.edit_message_text("❌ Ошибка обмена")
     
-    # Обработка админ панели
     elif query.data == "stats":
         total_players = len(db.data)
         total_coins = sum(user['coins'] for user in db.data.values())
-        await query.edit_message_text(
-            f"📊 СТАТИСТИКА:\n"
-            f"👥 Игроков: {total_players}\n"
-            f"💰 Всего коинов: {total_coins}"
+        total_items = sum(len(user['inventory']) for user in db.data.values())
+        total_farmed = sum(user['total_farmed'] for user in db.data.values())
+        
+        message = (
+            "📊════════════════════════════════════📊\n\n"
+            f"📈 <b>ПОДРОБНАЯ СТАТИСТИКА</b>\n\n"
+            f"👥 <b>Игроков:</b> {total_players}\n"
+            f"💰 <b>Всего коинов:</b> {total_coins}\n"
+            f"🎯 <b>Всего заработано:</b> {total_farmed}\n"
+            f"📦 <b>Предметов куплено:</b> {total_items}\n\n"
+            "📊════════════════════════════════════📊"
         )
+        
+        await query.edit_message_text(message, parse_mode='HTML')
+        
     elif query.data == "comp":
-        await query.edit_message_text("💰 Используйте /compensation")
+        await query.edit_message_text(
+            "💰 Используйте команду:\n<code>/compensation</code>",
+            parse_mode='HTML'
+        )
     elif query.data == "broadcast":
-        await query.edit_message_text("📢 Используйте /broadcast")
+        await query.edit_message_text(
+            "📢 Используйте команду:\n<code>/broadcast [текст]</code>",
+            parse_mode='HTML'
+        )
 
 # ========== ЗАПУСК БОТА ==========
 def main():
@@ -535,6 +1016,9 @@ def main():
         ("inventory", inventory),
         ("top", top),
         ("party", party),
+        ("write", write),
+        ("profile", profile),
+        ("users", users),
         ("help", start),
     ]
     
