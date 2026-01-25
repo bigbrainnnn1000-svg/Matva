@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 
-# ⚠️ ПРОВЕРЬ ТОКЕН!
 TOKEN = "8542959870:AAH7ECRyusZRDiULPWngvcjygQ9smi-cA3E"
 ADMIN_ID = 6443845944
 FARM_COOLDOWN = 4
@@ -32,31 +31,69 @@ class Database:
     def __init__(self, filename="kme_data.json"):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         self.filename = os.path.join(current_dir, filename)
+        
+        # Создаем резервную копию при запуске
+        self.create_backup()
+        
         self.data = self.load_data()
         print(f"📁 База данных: {self.filename}")
         print(f"👥 Загружено игроков: {len(self.data)}")
     
-    def load_data(self):
+    def create_backup(self):
         if os.path.exists(self.filename):
             try:
-                with open(self.filename, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    # Конвертируем старые данные
-                    for user_id, user_data in data.items():
-                        if 'last_active' not in user_data:
-                            user_data['last_active'] = datetime.now().isoformat()
-                    return data
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                backup_file = f"{self.filename}.backup_{timestamp}"
+                with open(self.filename, 'r', encoding='utf-8') as src:
+                    content = src.read()
+                    if content.strip():
+                        with open(backup_file, 'w', encoding='utf-8') as dst:
+                            dst.write(content)
+                        print(f"💾 Создана резервная копия: {backup_file}")
             except Exception as e:
-                print(f"⚠️ Ошибка загрузки БД: {e}")
+                print(f"⚠️ Не удалось создать бэкап: {e}")
+    
+    def load_data(self):
+        if not os.path.exists(self.filename):
+            print("📝 Файл базы не найден, создаю новую...")
+            return {}
+        
+        try:
+            with open(self.filename, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                
+            if not content:
+                print("⚠️ Файл базы пустой")
                 return {}
-        print("📝 Создаю новую базу данных...")
-        return {}
+            
+            data = json.loads(content)
+            
+            if not isinstance(data, dict):
+                print("❌ Неверный формат базы данных")
+                return {}
+            
+            # Конвертируем старые данные
+            for user_id, user_data in data.items():
+                if 'last_active' not in user_data:
+                    user_data['last_active'] = datetime.now().isoformat()
+            
+            print(f"✅ Успешно загружено {len(data)} пользователей")
+            return data
+            
+        except json.JSONDecodeError as e:
+            print(f"❌ Ошибка JSON в файле БД: {e}")
+            print("💡 База НЕ перезаписана, проверьте файл kme_data.json")
+            return {}
+        except Exception as e:
+            print(f"❌ Ошибка загрузки БД: {e}")
+            print("💡 База НЕ перезаписана, сохраняется старая")
+            return {}
     
     def save_data(self):
         try:
             with open(self.filename, 'w', encoding='utf-8') as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
-            print("💾 База данных сохранена")
+            print(f"💾 База сохранена: {len(self.data)} пользователей")
         except Exception as e:
             print(f"❌ Ошибка сохранения БД: {e}")
     
@@ -180,7 +217,6 @@ class Database:
         return LEVELS[-1]
     
     def search_users(self, search_term):
-        """Поиск пользователей по username или display_name"""
         results = []
         search_term = search_term.lower()
         
@@ -195,7 +231,6 @@ class Database:
 
 db = Database()
 
-# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 async def send_exchange_notification(context, user_id, item):
     user_data = db.get_user(user_id)
     
@@ -223,8 +258,6 @@ async def send_exchange_notification(context, user_id, item):
 async def send_party_announcement(context, user_id, mmr):
     user = await context.bot.get_chat(user_id)
     user_data = db.get_user(user_id)
-    
-    # Получаем уровень игрока
     level = db.get_user_level(user_data['total_farmed'])
     
     message = (
@@ -272,12 +305,10 @@ async def send_party_announcement(context, user_id, mmr):
     except Exception as e:
         print(f"❌ Ошибка отправки объявления: {e}")
 
-# ========== ОСНОВНЫЕ КОМАНДЫ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.update_user(user.id, user.username, user.full_name)
     user_data = db.get_user(user.id)
-    
     level = db.get_user_level(user_data['total_farmed'])
     
     message = (
@@ -336,7 +367,6 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.update_user(user.id)
     user_data = db.get_user(user.id)
-    
     level = db.get_user_level(user_data['total_farmed'])
     
     message = (
@@ -356,10 +386,8 @@ async def level(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.update_user(user.id)
     user_data = db.get_user(user.id)
-    
     current_level = db.get_user_level(user_data['total_farmed'])
     
-    # Находим следующий уровень
     next_level = None
     for i, level in enumerate(LEVELS):
         if level["min_coins"] <= user_data['total_farmed'] <= level["max_coins"]:
@@ -411,7 +439,6 @@ async def buy_item(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: 
     user = update.effective_user
     db.update_user(user.id)
     success, result = db.buy_item(user.id, item_id)
-    
     user_data = db.get_user(user.id)
     
     if success:
@@ -492,7 +519,6 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             medal = f"{i+1}."
         
-        # Определяем имя для отображения
         if user_data.get('username'):
             name = f"@{user_data['username']}"
         elif user_data.get('display_name'):
@@ -502,7 +528,6 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             name = f"ID:{user_id[:6]}"
         
-        # Получаем уровень игрока
         level = db.get_user_level(user_data['total_farmed'])
         
         message += (
@@ -536,11 +561,8 @@ async def party(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         mmr = int(context.args[0])
-        
-        # Отправляем объявление админу
         await send_party_announcement(context, user.id, mmr)
         
-        # Подтверждение игроку
         message = (
             "✅════════════════════════════════════✅\n\n"
             f"🎮 <b>ЗАЯВКА ПРИНЯТА!</b>\n\n"
@@ -551,7 +573,7 @@ async def party(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✅════════════════════════════════════✅"
         )
         
-        await update.message.reply_text(message, parse_mode='HTML')
+        await update.message.reply_text(message, parse_mode='HTML())
         
     except ValueError:
         await update.message.reply_text("❌ Укажите число MMR")
@@ -577,7 +599,6 @@ async def write(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = int(context.args[0])
         message_text = " ".join(context.args[1:])
         
-        # Формируем сообщение для получателя
         receiver_message = (
             "📨════════════════════════════════════📨\n\n"
             f"💌 <b>ВАМ ПРИШЛО СООБЩЕНИЕ!</b>\n\n"
@@ -591,7 +612,6 @@ async def write(update: Update, context: ContextTypes.DEFAULT_TYPE):
         receiver_message += f"💬 <b>Сообщение:</b>\n<code>{message_text}</code>\n\n"
         receiver_message += "📨════════════════════════════════════📨"
         
-        # Пытаемся отправить сообщение
         try:
             await context.bot.send_message(
                 chat_id=target_id,
@@ -599,7 +619,6 @@ async def write(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML'
             )
             
-            # Подтверждение отправителю
             confirmation = (
                 "✅════════════════════════════════════✅\n\n"
                 f"📨 <b>СООБЩЕНИЕ ОТПРАВЛЕНО!</b>\n\n"
@@ -624,7 +643,6 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = db.get_user(user.id)
     level = db.get_user_level(user_data['total_farmed'])
     
-    # Считаем активность
     last_active = datetime.fromisoformat(user_data['last_active'])
     hours_ago = (datetime.now() - last_active).seconds // 3600
     
@@ -654,12 +672,10 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message, parse_mode='HTML')
 
 async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Поиск пользователей"""
     user = update.effective_user
     db.update_user(user.id)
     
     if not context.args:
-        # Показываем статистику по пользователям
         total_users = len(db.data)
         active_today = 0
         
@@ -705,7 +721,6 @@ async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     for i, (user_id, user_data) in enumerate(results[:10], 1):
-        # Определяем имя для отображения
         if user_data.get('username'):
             name = f"@{user_data['username']}"
         elif user_data.get('display_name'):
@@ -715,7 +730,6 @@ async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             name = f"ID:{user_id[:6]}"
         
-        # Получаем уровень игрока
         level = db.get_user_level(user_data['total_farmed'])
         
         message += (
@@ -734,7 +748,6 @@ async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(message, parse_mode='HTML')
 
-# ========== АДМИН КОМАНДЫ ==========
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
@@ -928,7 +941,127 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
 
-# ========== ОБРАБОТЧИКИ КНОПОК ==========
+async def backup_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Только для админа!")
+        return
+    
+    try:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_file = f"kme_data.json.backup_{timestamp}"
+        
+        with open('kme_data.json', 'r', encoding='utf-8') as src:
+            with open(backup_file, 'w', encoding='utf-8') as dst:
+                dst.write(src.read())
+        
+        message = (
+            "💾════════════════════════════════════💾\n\n"
+            f"✅ <b>РЕЗЕРВНАЯ КОПИЯ СОЗДАНА!</b>\n\n"
+            f"📁 <b>Файл:</b> {backup_file}\n"
+            f"👥 <b>Пользователей:</b> {len(db.data)}\n"
+            f"📊 <b>Размер:</b> {os.path.getsize(backup_file)} байт\n\n"
+            "💾════════════════════════════════════💾"
+        )
+        
+        await update.message.reply_text(message, parse_mode='HTML')
+        
+        with open(backup_file, 'rb') as f:
+            await update.message.reply_document(
+                document=f,
+                filename=backup_file
+            )
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка создания бэкапа: {e}")
+
+async def restore_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Только для админа!")
+        return
+    
+    if not update.message.document:
+        message = (
+            "🔄════════════════════════════════════🔄\n\n"
+            f"📥 <b>ВОССТАНОВЛЕНИЕ БАЗЫ ДАННЫХ</b>\n\n"
+            f"📝 <b>Использование:</b>\n"
+            f"1. Отправьте файл kme_data.json\n"
+            f"2. Напишите команду: /restore_db\n\n"
+            f"⚠️ <b>Внимание:</b> Старая база будет сохранена как backup\n"
+            "🔄════════════════════════════════════🔄"
+        )
+        await update.message.reply_text(message, parse_mode='HTML')
+        return
+    
+    try:
+        file = await update.message.document.get_file()
+        
+        if os.path.exists('kme_data.json'):
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            old_backup = f"kme_data.json.old_{timestamp}"
+            os.rename('kme_data.json', old_backup)
+        
+        await file.download_to_drive('kme_data.json')
+        
+        global db
+        db = Database()
+        
+        message = (
+            "✅════════════════════════════════════✅\n\n"
+            f"🔄 <b>БАЗА ДАННЫХ ВОССТАНОВЛЕНА!</b>\n\n"
+            f"👥 <b>Пользователей загружено:</b> {len(db.data)}\n"
+            f"💾 <b>Старая база сохранена:</b> {old_backup}\n\n"
+        )
+        
+        top_users = sorted(db.data.items(), key=lambda x: x[1]['coins'], reverse=True)[:3]
+        for i, (user_id, user_data) in enumerate(top_users, 1):
+            name = f"@{user_data.get('username', '')}" if user_data.get('username') else f"ID:{user_id[:6]}"
+            message += f"{i}. {name} - {user_data['coins']} коинов\n"
+        
+        message += "\n✅════════════════════════════════════✅"
+        
+        await update.message.reply_text(message, parse_mode='HTML')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка восстановления: {e}")
+
+async def db_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Только для админа!")
+        return
+    
+    import glob
+    db_files = glob.glob("kme_data.json*")
+    
+    message = (
+        "📊════════════════════════════════════📊\n\n"
+        f"🗃️ <b>ИНФОРМАЦИЯ О БАЗЕ ДАННЫХ</b>\n\n"
+    )
+    
+    for db_file in sorted(db_files):
+        if os.path.exists(db_file):
+            size = os.path.getsize(db_file)
+            modified = datetime.fromtimestamp(os.path.getmtime(db_file)).strftime('%d.%m.%Y %H:%M')
+            
+            if db_file == "kme_data.json":
+                message += f"📁 <b>Основная база:</b> {db_file}\n"
+                message += f"   📏 Размер: {size} байт\n"
+                message += f"   ⏰ Изменена: {modified}\n"
+                message += f"   👥 Пользователей: {len(db.data)}\n\n"
+            else:
+                message += f"📁 Резервная: {db_file}\n"
+                message += f"   📏 Размер: {size} байт\n"
+                message += f"   ⏰ Изменена: {modified}\n\n"
+    
+    message += (
+        f"💡 <b>Команды:</b>\n"
+        f"• /backup_db - Создать резервную копию\n"
+        f"• /restore_db - Восстановить из файла\n"
+        f"• /db_info - Эта информация\n\n"
+        "📊════════════════════════════════════📊"
+    )
+    
+    await update.message.reply_text(message, parse_mode='HTML')
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -958,8 +1091,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             
             await query.edit_message_text(message, parse_mode='HTML')
-            
-            # Отправляем уведомление админу
             await send_exchange_notification(context, user.id, item)
             
         else:
@@ -994,7 +1125,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
 
-# ========== ЗАПУСК БОТА ==========
 def main():
     print("=" * 50)
     print("🤖 KMEbot запускается...")
@@ -1006,7 +1136,6 @@ def main():
     
     app = Application.builder().token(TOKEN).build()
     
-    # Основные команды
     commands = [
         ("start", start),
         ("farm", farm),
@@ -1025,7 +1154,6 @@ def main():
     for cmd, handler in commands:
         app.add_handler(CommandHandler(cmd, handler))
     
-    # Покупка предметов
     def create_buy_handler(item_id):
         async def handler(update, context):
             return await buy_item(update, context, item_id)
@@ -1034,32 +1162,8 @@ def main():
     for item_id in SHOP_ITEMS.keys():
         app.add_handler(CommandHandler(f"buy_{item_id}", create_buy_handler(item_id)))
     
-    # Админ команды
     admin_commands = [
         ("admin", admin),
         ("give", give),
         ("announce", announce),
-        ("broadcast", broadcast),
-        ("compensation", compensation),
-        ("removeitem", removeitem),
-    ]
-    
-    for cmd, handler in admin_commands:
-        app.add_handler(CommandHandler(cmd, handler))
-    
-    # Кнопки
-    app.add_handler(CallbackQueryHandler(button_handler))
-    
-    print("✅ Бот запущен!")
-    print("📱 Напишите боту /start в Telegram")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n🛑 Бот остановлен")
-    except Exception as e:
-        print(f"❌ Ошибка запуска: {e}")
-        import traceback
-        traceback.print_exc()
+        ("broadcast", bro
