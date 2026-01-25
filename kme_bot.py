@@ -341,7 +341,8 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ {msg}")
         return
     
-    coins = random.randint(0, 5)
+    # Изменено: теперь падает 0-4 коина вместо 0-5
+    coins = random.randint(0, 4)
     new_balance = db.add_coins(user.id, coins)
     
     farm_messages = [
@@ -573,7 +574,7 @@ async def party(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✅════════════════════════════════════✅"
         )
         
-        await update.message.reply_text(message, parse_mode='HTML
+        await update.message.reply_text(message, parse_mode='HTML')
         
     except ValueError:
         await update.message.reply_text("❌ Укажите число MMR")
@@ -1130,7 +1131,7 @@ def main():
     print("🤖 KMEbot запускается...")
     print(f"👥 Игроков: {len(db.data)}")
     print(f"🎮 Уровней: {len(LEVELS)}")
-    print(f"💰 Фарм: 0-5 коинов, {FARM_COOLDOWN}ч КД")
+    print(f"💰 Фарм: 0-4 коинов, {FARM_COOLDOWN}ч КД")
     print(f"👑 Админ ID: {ADMIN_ID}")
     print("=" * 50)
     
@@ -1149,6 +1150,15 @@ def main():
         ("profile", profile),
         ("users", users),
         ("help", start),
+        ("announce", announce),
+        ("broadcast", broadcast),
+        ("compensation", compensation),
+        ("removeitem", removeitem),
+        ("admin", admin),
+        ("backup_db", backup_db),
+        ("restore_db", restore_db),
+        ("db_info", db_info),
+        ("give", give),
     ]
     
     for cmd, handler in commands:
@@ -1162,9 +1172,10 @@ def main():
     for item_id in SHOP_ITEMS.keys():
         app.add_handler(CommandHandler(f"buy_{item_id}", create_buy_handler(item_id)))
     
-    admin_commands = [
-        ("admin", admin),
-        ("give", give),
-        ("announce", announce),
-        ("broadcast", bro
+    app.add_handler(CallbackQueryHandler(button_handler))
+    
+    print("✅ Бот запущен!")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
+if __name__ == "__main__":
+    main()
