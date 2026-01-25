@@ -33,136 +33,77 @@ class Database:
     def __init__(self, filename="kme_data.json"):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         self.filename = os.path.join(current_dir, filename)
-        self.backup_dir = os.path.join(current_dir, "backups")
-        
-        if not os.path.exists(self.backup_dir):
-            os.makedirs(self.backup_dir)
         
         print(f"📁 База данных: {self.filename}")
         
-        if os.path.exists(self.filename):
-            print("✅ Файл базы данных существует")
-            self.create_backup("before_load")
-        else:
-            print("⚠️ Файл базы данных не найден")
-            
+        # Создаем резервную копию при запуске
+        self.create_backup()
+        
         self.data = self.load_data()
         print(f"👥 Загружено игроков: {len(self.data)}")
     
-    def create_backup(self, reason="manual"):
+    def create_backup(self):
         if os.path.exists(self.filename):
             try:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                backup_file = os.path.join(self.backup_dir, f"kme_data_backup_{reason}_{timestamp}.json")
-                
+                backup_file = f"{self.filename}.backup_{timestamp}"
                 with open(self.filename, 'r', encoding='utf-8') as src:
                     content = src.read()
-                    
-                if content.strip():
-                    with open(backup_file, 'w', encoding='utf-8') as dst:
-                        dst.write(content)
-                    print(f"💾 Создана резервная копия: {backup_file}")
-                    return True
+                    if content.strip():
+                        with open(backup_file, 'w', encoding='utf-8') as dst:
+                            dst.write(content)
+                        print(f"💾 Создана резервная копия: {backup_file}")
             except Exception as e:
                 print(f"⚠️ Не удалось создать бэкап: {e}")
-        return False
     
     def load_data(self):
+        """ВОССТАНАВЛИВАЕМ СТАРЫЙ РАБОЧИЙ МЕТОД ЗАГРУЗКИ"""
         if not os.path.exists(self.filename):
             print("📝 Файл базы не найден, создаю новую...")
             return {}
         
-        print("🔄 Загружаю базу данных...")
-        
-        for attempt in range(3):
-            try:
-                with open(self.filename, 'r', encoding='utf-8') as f:
-                    content = f.read().strip()
-                
-                if not content:
-                    print("⚠️ Файл базы пустой")
-                    return {}
-                
-                data = json.loads(content)
-                
-                if not isinstance(data, dict):
-                    print("❌ Неверный формат базы данных")
-                    self.save_corrupted_backup(content)
-                    return {}
-                
-                valid_users = 0
-                for user_id, user_data in data.items():
-                    if isinstance(user_data, dict):
-                        if 'coins' not in user_data:
-                            user_data['coins'] = 0
-                        if 'last_farm' not in user_data:
-                            user_data['last_farm'] = None
-                        if 'username' not in user_data:
-                            user_data['username'] = ''
-                        if 'display_name' not in user_data:
-                            user_data['display_name'] = ''
-                        if 'inventory' not in user_data:
-                            user_data['inventory'] = []
-                        if 'total_farmed' not in user_data:
-                            user_data['total_farmed'] = 0
-                        if 'farm_count' not in user_data:
-                            user_data['farm_count'] = 0
-                        if 'admin_gifted' not in user_data:
-                            user_data['admin_gifted'] = 0
-                        if 'last_active' not in user_data:
-                            user_data['last_active'] = datetime.now().isoformat()
-                        valid_users += 1
-                
-                print(f"✅ Успешно загружено {valid_users} пользователей")
-                return data
-                
-            except json.JSONDecodeError as e:
-                print(f"❌ Попытка {attempt + 1}: Ошибка JSON в файле БД: {e}")
-                if attempt < 2:
-                    print("🔄 Пробую снова...")
-                    time.sleep(1)
-                else:
-                    print("💡 База данных НЕ перезаписана")
-                    self.save_corrupted_backup(content if 'content' in locals() else "")
-                    return {}
-            except Exception as e:
-                print(f"❌ Попытка {attempt + 1}: Ошибка загрузки БД: {e}")
-                if attempt < 2:
-                    print("🔄 Пробую снова...")
-                    time.sleep(1)
-                else:
-                    print("💡 База данных НЕ перезаписана")
-                    self.save_corrupted_backup(content if 'content' in locals() else "")
-                    return {}
-        
-        return {}
-    
-    def save_corrupted_backup(self, content):
         try:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            corrupted_file = os.path.join(self.backup_dir, f"kme_data_corrupted_{timestamp}.json")
+            with open(self.filename, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                
+            if not content:
+                print("⚠️ Файл базы пустой")
+                return {}
             
-            with open(corrupted_file, 'w', encoding='utf-8') as f:
-                f.write(content)
+            data = json.loads(content)
             
-            print(f"⚠️ Поврежденный файл сохранен: {corrupted_file}")
-            return corrupted_file
+            if not isinstance(data, dict):
+                print("❌ Неверный формат базы данных")
+                return {}
+            
+            # Конвертируем старые данные - добавляем недостающие поля
+            for user_id, user_data in data.items():
+                if 'last_active' not in user_data:
+                    user_data['last_active'] = datetime.now().isoformat()
+                # Добавляем другие поля если их нет
+                if 'admin_gifted' not in user_data:
+                    user_data['admin_gifted'] = 0
+            
+            print(f"✅ Успешно загружено {len(data)} пользователей")
+            return data
+            
+        except json.JSONDecodeError as e:
+            print(f"❌ Ошибка JSON в файле БД: {e}")
+            print("💡 База НЕ перезаписана, проверьте файл kme_data.json")
+            # ВОЗВРАЩАЕМ ПУСТУЮ БАЗУ, НО НЕ УДАЛЯЕМ СТАРУЮ
+            return {}
         except Exception as e:
-            print(f"❌ Не удалось сохранить поврежденный файл: {e}")
-            return None
+            print(f"❌ Ошибка загрузки БД: {e}")
+            print("💡 База НЕ перезаписана, сохраняется старая")
+            return {}
     
     def save_data(self):
         try:
-            temp_file = self.filename + ".tmp"
-            with open(temp_file, 'w', encoding='utf-8') as f:
+            with open(self.filename, 'w', encoding='utf-8') as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
-            
-            os.replace(temp_file, self.filename)
             print(f"💾 База сохранена: {len(self.data)} пользователей")
-            return True
         except Exception as e:
             print(f"❌ Ошибка сохранения БД: {e}")
-            return False
     
     def get_user(self, user_id):
         user_id = str(user_id)
@@ -298,6 +239,10 @@ class Database:
 
 db = Database()
 
+# Восстановите вашу старую БД:
+# 1. Убедитесь что файл kme_data.json с вашими данными в папке с ботом
+# 2. Если его нет, создайте его вручную со старыми данными
+
 async def send_exchange_notification(context, user_id, item):
     user_data = db.get_user(user_id)
     
@@ -305,22 +250,19 @@ async def send_exchange_notification(context, user_id, item):
     display_name = user_data.get('display_name', 'Неизвестно')
     
     message = (
-        f"🔔 НОВЫЙ ОБМЕН ПРЕДМЕТА!\n\n"
-        f"🎁 Предмет: {item['name']}\n"
-        f"💰 Цена: {item['price']} коинов\n"
-        f"👤 Игрок: {user_name}\n"
-        f"📝 Имя: {display_name}\n"
-        f"🆔 ID: {user_id}\n\n"
-        f"⚠️ Не забудьте выполнить услугу!\n"
-        f"✅ После выполнения удалите:\n"
+        f"🔔 НОВЫЙ ОБМЕН!\n\n"
+        f"🎁 {item['name']}\n"
+        f"💰 {item['price']} коинов\n"
+        f"👤 {user_name} ({display_name})\n"
+        f"🆔 {user_id}\n\n"
+        f"✅ После выполнения:\n"
         f"/removeitem {user_id} {len(user_data['inventory'])-1}"
     )
     
     try:
         await context.bot.send_message(chat_id=ADMIN_ID, text=message)
-        print(f"📨 Уведомление об обмене отправлено: {user_id} -> {item['name']}")
     except Exception as e:
-        print(f"❌ Ошибка отправки уведомления: {e}")
+        print(f"❌ Ошибка уведомления: {e}")
 
 async def send_party_announcement(context, user_id, mmr):
     user = await context.bot.get_chat(user_id)
@@ -353,10 +295,9 @@ async def send_party_announcement(context, user_id, mmr):
     )
     
     if user.username:
-        message += f"1. 📨 Написать в Telegram: @{user.username}\n"
-        message += f"2. 🤖 Написать в боте: /write {user_id}\n"
-    else:
-        message += f"📨 Написать в боте: /write {user_id}"
+        message += f"📨 Telegram: @{user.username}\n"
+    
+    message += f"🤖 Бот: /write {user_id}"
     
     try:
         await context.bot.send_message(
@@ -364,9 +305,8 @@ async def send_party_announcement(context, user_id, mmr):
             text=message,
             parse_mode='HTML'
         )
-        print(f"📢 Объявление о поиске тимы: {user_id} (MMR: {mmr})")
     except Exception as e:
-        print(f"❌ Ошибка отправки объявления: {e}")
+        print(f"❌ Ошибка объявления: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -380,8 +320,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🏆 <b>Уровень:</b> {level['name']}\n\n"
         "📋 <b>Основные команды:</b>\n"
         "/farm - Фармить коины\n"
-        "/balance - Ваш баланс\n"
-        "/level - Ваш уровень\n"
+        "/balance - Баланс\n"
+        "/level - Уровень\n"
         "/shop - Магазин (только в ЛС)\n"
         "/inventory - Инвентарь\n"
         "/party [MMR] - Найти тиму\n"
@@ -404,8 +344,8 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not can_farm:
         try:
             await update.message.reply_text(f"❌ {msg}")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут cooldown для {user.id}")
+        except:
+            pass
         return
     
     coins = random.randint(0, 4)
@@ -428,8 +368,8 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         await update.message.reply_text(message, parse_mode='HTML')
-    except telegram.error.TimedOut:
-        print(f"⚠️ Таймаут farm для {user.id}")
+    except:
+        pass
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -448,8 +388,8 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         await update.message.reply_text(message, parse_mode='HTML')
-    except telegram.error.TimedOut:
-        print(f"⚠️ Таймаут balance для {user.id}")
+    except:
+        pass
 
 async def level(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -476,16 +416,16 @@ async def level(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         await update.message.reply_text(message, parse_mode='HTML')
-    except telegram.error.TimedOut:
-        print(f"⚠️ Таймаут level для {user.id}")
+    except:
+        pass
 
 async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Проверяем, что команда используется в личных сообщениях
+    # ПРОВЕРКА ЧТО КОМАНДА ТОЛЬКО В ЛИЧНЫХ СООБЩЕНИЯХ
     if update.message.chat.type != "private":
         try:
             await update.message.reply_text(
                 "🛍️ <b>Магазин доступен только в личных сообщениях с ботом!</b>\n\n"
-                "👉 Напишите мне в ЛС: @KmeDotaBot",
+                "👉 Напишите мне в ЛС",
                 parse_mode='HTML'
             )
         except:
@@ -512,8 +452,8 @@ async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         await update.message.reply_text(message, parse_mode='HTML')
-    except telegram.error.TimedOut:
-        print(f"⚠️ Таймаут shop для {user.id}")
+    except:
+        pass
 
 async def buy_item(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int):
     user = update.effective_user
@@ -527,17 +467,17 @@ async def buy_item(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: 
             f"🎁 <b>Предмет:</b> {result}\n"
             f"💳 <b>Новый баланс:</b> {user_data['coins']} коинов\n\n"
             f"📦 Предмет в инвентаре\n"
-            f"🔧 Используйте /inventory для обмена"
+            f"🔧 /inventory для обмена"
         )
         try:
             await update.message.reply_text(message, parse_mode='HTML')
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут buy_item для {user.id}")
+        except:
+            pass
     else:
         try:
             await update.message.reply_text(f"❌ {result}")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут ошибки покупки для {user.id}")
+        except:
+            pass
 
 async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -547,12 +487,12 @@ async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_data['inventory']:
         message = (
             f"📦 <b>ИНВЕНТАРЬ ПУСТ</b>\n\n"
-            f"🛍️ Зайдите в магазин /shop"
+            f"🛍️ /shop"
         )
         try:
             await update.message.reply_text(message, parse_mode='HTML')
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут inventory для {user.id}")
+        except:
+            pass
         return
     
     keyboard = []
@@ -582,15 +522,15 @@ async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='HTML'
         )
-    except telegram.error.TimedOut:
-        print(f"⚠️ Таймаут inventory для {user.id}")
+    except:
+        pass
 
 async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not db.data:
         try:
             await update.message.reply_text("📭 Нет игроков")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут top")
+        except:
+            pass
         return
     
     top_users = sorted(db.data.items(), key=lambda x: x[1]['total_farmed'], reverse=True)[:10]
@@ -623,8 +563,8 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         await update.message.reply_text(message, parse_mode='HTML')
-    except telegram.error.TimedOut:
-        print(f"⚠️ Таймаут top")
+    except:
+        pass
 
 async def party(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -640,8 +580,8 @@ async def party(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         try:
             await update.message.reply_text(message, parse_mode='HTML')
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут party помощь для {user.id}")
+        except:
+            pass
         return
     
     try:
@@ -658,14 +598,14 @@ async def party(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             await update.message.reply_text(message, parse_mode='HTML')
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут party подтверждение для {user.id}")
+        except:
+            pass
         
     except ValueError:
         try:
             await update.message.reply_text("❌ Укажите число MMR")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут party ошибка для {user.id}")
+        except:
+            pass
 
 async def write(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -681,8 +621,8 @@ async def write(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         try:
             await update.message.reply_text(message, parse_mode='HTML')
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут write помощь для {user.id}")
+        except:
+            pass
         return
     
     try:
@@ -715,21 +655,21 @@ async def write(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             try:
                 await update.message.reply_text(confirmation, parse_mode='HTML')
-            except telegram.error.TimedOut:
-                print(f"⚠️ Таймаут write подтверждение для {user.id}")
+            except:
+                pass
             
         except Exception as e:
             error_msg = "❌ Не удалось отправить сообщение. Игрок может заблокировать бота."
             try:
                 await update.message.reply_text(error_msg)
-            except telegram.error.TimedOut:
-                print(f"⚠️ Таймаут write ошибка для {user.id}")
+            except:
+                pass
             
     except ValueError:
         try:
             await update.message.reply_text("❌ ID должен быть числом")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут write ошибка ID для {user.id}")
+        except:
+            pass
 
 async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -763,8 +703,8 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         await update.message.reply_text(message, parse_mode='HTML')
-    except telegram.error.TimedOut:
-        print(f"⚠️ Таймаут profile для {user.id}")
+    except:
+        pass
 
 async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -786,14 +726,13 @@ async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔍 <b>Поиск игроков:</b>\n"
             f"<code>/users [имя или username]</code>\n\n"
             f"📋 <b>Пример:</b>\n"
-            f"<code>/users matvei</code>\n"
-            f"<code>/users @username</code>"
+            f"<code>/users matvei</code>"
         )
         
         try:
             await update.message.reply_text(message, parse_mode='HTML')
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут users статистика для {user.id}")
+        except:
+            pass
         return
     
     search_term = " ".join(context.args)
@@ -802,18 +741,16 @@ async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not results:
         message = (
             f"🔍 <b>НИЧЕГО НЕ НАЙДЕНО</b>\n\n"
-            f"🔍 <b>Поиск:</b> {search_term}\n\n"
-            f"💡 Попробуйте другое имя"
+            f"🔍 <b>Поиск:</b> {search_term}"
         )
         try:
             await update.message.reply_text(message, parse_mode='HTML')
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут users поиск для {user.id}")
+        except:
+            pass
         return
     
     message = (
         f"✅ <b>НАЙДЕНО {len(results)} ИГРОКОВ</b>\n\n"
-        f"🔍 <b>Поиск:</b> {search_term}\n\n"
     )
     
     for i, (user_id, user_data) in enumerate(results[:10], 1):
@@ -830,7 +767,7 @@ async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         message += (
             f"{i}. <b>{name}</b>\n"
-            f"🆔 ID: <code>{user_id}</code>\n"
+            f"🆔 <code>{user_id}</code>\n"
             f"💰 {user_data['coins']} коинов | {level['name']}\n"
         )
     
@@ -839,18 +776,21 @@ async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         await update.message.reply_text(message, parse_mode='HTML')
-    except telegram.error.TimedOut:
-        print(f"⚠️ Таймаут users результаты для {user.id}")
+    except:
+        pass
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
+
+# Остальные функции (give, announce, broadcast, compensation, removeitem, admin, backup_db, restore_db, db_info, button_handler)
+# оставляем как в предыдущем рабочем коде, но с компактными сообщениями
 
 async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         try:
             await update.message.reply_text("❌ Только для админа!")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут ошибка админа для {update.effective_user.id}")
+        except:
+            pass
         return
     
     if not update.message.reply_to_message or not context.args:
@@ -864,8 +804,8 @@ async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         try:
             await update.message.reply_text(message, parse_mode='HTML')
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут give помощь")
+        except:
+            pass
         return
     
     try:
@@ -882,28 +822,28 @@ async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             await update.message.reply_text(message, parse_mode='HTML')
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут give подтверждение")
+        except:
+            pass
         
     except:
         try:
             await update.message.reply_text("❌ Ошибка! Укажите число")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут give ошибка")
+        except:
+            pass
 
 async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         try:
             await update.message.reply_text("❌ Только для админа!")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут ошибка админа для {update.effective_user.id}")
+        except:
+            pass
         return
     
     if not context.args:
         try:
             await update.message.reply_text("❌ Формат: /announce [текст]")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут announce помощь")
+        except:
+            pass
         return
     
     text = " ".join(context.args)
@@ -913,22 +853,22 @@ async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     try:
         await update.message.reply_text(message, parse_mode='HTML')
-    except telegram.error.TimedOut:
-        print(f"⚠️ Таймаут announce")
+    except:
+        pass
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         try:
             await update.message.reply_text("❌ Только для админа!")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут ошибка админа для {update.effective_user.id}")
+        except:
+            pass
         return
     
     if not context.args:
         try:
             await update.message.reply_text("❌ Формат: /broadcast [текст]")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут broadcast помощь")
+        except:
+            pass
         return
     
     text = " ".join(context.args)
@@ -948,9 +888,6 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML'
             )
             sent += 1
-        except telegram.error.TimedOut:
-            failed += 1
-            print(f"⚠️ Таймаут broadcast для {user_id}")
         except:
             failed += 1
     
@@ -962,15 +899,15 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         await update.message.reply_text(result, parse_mode='HTML')
-    except telegram.error.TimedOut:
-        print(f"⚠️ Таймаут broadcast результат")
+    except:
+        pass
 
 async def compensation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         try:
             await update.message.reply_text("❌ Только для админа!")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут ошибка админа для {update.effective_user.id}")
+        except:
+            pass
         return
     
     total = db.add_compensation_to_all(COMPENSATION_AMOUNT)
@@ -984,15 +921,15 @@ async def compensation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         await update.message.reply_text(message, parse_mode='HTML')
-    except telegram.error.TimedOut:
-        print(f"⚠️ Таймаут compensation")
+    except:
+        pass
 
 async def removeitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         try:
             await update.message.reply_text("❌ Только для админа!")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут ошибка админа для {update.effective_user.id}")
+        except:
+            pass
         return
     
     if len(context.args) != 2:
@@ -1005,8 +942,8 @@ async def removeitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         try:
             await update.message.reply_text(message, parse_mode='HTML')
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут removeitem помощь")
+        except:
+            pass
         return
     
     try:
@@ -1028,26 +965,26 @@ async def removeitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             try:
                 await update.message.reply_text(message, parse_mode='HTML')
-            except telegram.error.TimedOut:
-                print(f"⚠️ Таймаут removeitem подтверждение")
+            except:
+                pass
         else:
             try:
                 await update.message.reply_text("❌ Не удалось удалить предмет")
-            except telegram.error.TimedOut:
-                print(f"⚠️ Таймаут removeitem ошибка")
+            except:
+                pass
             
     except (ValueError, IndexError):
         try:
             await update.message.reply_text("❌ Ошибка! Проверьте ID и номер предмета")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут removeitem ошибка валидации")
+        except:
+            pass
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         try:
             await update.message.reply_text("❌ Только для админа!")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут ошибка админа для {update.effective_user.id}")
+        except:
+            pass
         return
     
     total_players = len(db.data)
@@ -1075,37 +1012,38 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='HTML'
         )
-    except telegram.error.TimedOut:
-        print(f"⚠️ Таймаут admin панель")
+    except:
+        pass
 
 async def backup_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         try:
             await update.message.reply_text("❌ Только для админа!")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут ошибка админа для {update.effective_user.id}")
+        except:
+            pass
         return
     
     try:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         backup_file = f"kme_data.json.backup_{timestamp}"
         
-        if db.create_backup("manual"):
-            message = (
-                f"✅ <b>РЕЗЕРВНАЯ КОПИЯ СОЗДАНА!</b>\n\n"
-                f"📁 <b>Файл:</b> {backup_file}\n"
-                f"👥 <b>Пользователей:</b> {len(db.data)}"
+        with open('kme_data.json', 'r', encoding='utf-8') as src:
+            with open(backup_file, 'w', encoding='utf-8') as dst:
+                dst.write(src.read())
+        
+        message = (
+            f"✅ <b>РЕЗЕРВНАЯ КОПИЯ СОЗДАНА!</b>\n\n"
+            f"📁 <b>Файл:</b> {backup_file}\n"
+            f"👥 <b>Пользователей:</b> {len(db.data)}"
+        )
+        
+        await update.message.reply_text(message, parse_mode='HTML')
+        
+        with open(backup_file, 'rb') as f:
+            await update.message.reply_document(
+                document=f,
+                filename=backup_file
             )
-            
-            await update.message.reply_text(message, parse_mode='HTML')
-            
-            with open('kme_data.json', 'rb') as f:
-                await update.message.reply_document(
-                    document=f,
-                    filename=backup_file
-                )
-        else:
-            await update.message.reply_text("❌ Не удалось создать резервную копию")
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка создания бэкапа: {e}")
@@ -1142,13 +1080,8 @@ async def restore_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = (
             f"✅ <b>БАЗА ВОССТАНОВЛЕНА!</b>\n\n"
             f"👥 <b>Пользователей:</b> {len(db.data)}\n"
-            f"💾 <b>Старая база:</b> {old_backup}\n\n"
+            f"💾 <b>Старая база:</b> {old_backup}"
         )
-        
-        top_users = sorted(db.data.items(), key=lambda x: x[1]['coins'], reverse=True)[:3]
-        for i, (user_id, user_data) in enumerate(top_users, 1):
-            name = f"@{user_data.get('username', '')}" if user_data.get('username') else f"ID:{user_id[:6]}"
-            message += f"{i}. {name} - {user_data['coins']} коинов\n"
         
         await update.message.reply_text(message, parse_mode='HTML')
         
@@ -1205,8 +1138,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data.startswith("view_"):
         try:
             await query.edit_message_text("✅ Предмет уже обменян")
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут button view для {query.from_user.id}")
+        except:
+            pass
     
     elif query.data.startswith("exchange_"):
         item_index = int(query.data.split("_")[1])
@@ -1226,14 +1159,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await query.edit_message_text(message, parse_mode='HTML')
                 await send_exchange_notification(context, user.id, item)
-            except telegram.error.TimedOut:
-                print(f"⚠️ Таймаут button exchange для {user.id}")
+            except:
+                pass
             
         else:
             try:
                 await query.edit_message_text("❌ Ошибка обмена")
-            except telegram.error.TimedOut:
-                print(f"⚠️ Таймаут button exchange ошибка для {user.id}")
+            except:
+                pass
     
     elif query.data == "stats":
         total_players = len(db.data)
@@ -1251,8 +1184,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             await query.edit_message_text(message, parse_mode='HTML')
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут button stats")
+        except:
+            pass
         
     elif query.data == "comp":
         try:
@@ -1260,36 +1193,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "💰 Используйте:\n<code>/compensation</code>",
                 parse_mode='HTML'
             )
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут button comp")
+        except:
+            pass
     elif query.data == "broadcast":
         try:
             await query.edit_message_text(
                 "📢 Используйте:\n<code>/broadcast [текст]</code>",
                 parse_mode='HTML'
             )
-        except telegram.error.TimedOut:
-            print(f"⚠️ Таймаут button broadcast")
-
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        error = context.error
-        
-        if isinstance(error, telegram.error.TimedOut):
-            print(f"⚠️ Таймаут")
-            return
-        
-        if isinstance(error, telegram.error.NetworkError):
-            print(f"⚠️ Ошибка сети: {error}")
-            return
-        
-        print(f"⚠️ Ошибка: {error}")
-        
-        import traceback
-        traceback.print_exc()
-        
-    except Exception as e:
-        print(f"❌ Ошибка в обработчике: {e}")
+        except:
+            pass
 
 def main():
     print("=" * 50)
@@ -1300,16 +1213,7 @@ def main():
     print(f"👑 Админ ID: {ADMIN_ID}")
     print("=" * 50)
     
-    application = (
-        Application.builder()
-        .token(TOKEN)
-        .read_timeout(30)
-        .write_timeout(30)
-        .connect_timeout(30)
-        .pool_timeout(30)
-        .get_updates_read_timeout(30)
-        .build()
-    )
+    application = Application.builder().token(TOKEN).build()
     
     commands = [
         ("start", start),
@@ -1347,23 +1251,9 @@ def main():
         application.add_handler(CommandHandler(f"buy_{item_id}", create_buy_handler(item_id)))
     
     application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_error_handler(error_handler)
     
     print("✅ Бот запущен!")
-    
-    try:
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=False,
-            close_loop=False
-        )
-    except KeyboardInterrupt:
-        print("\n🛑 Бот остановлен")
-    except Exception as e:
-        print(f"❌ Критическая ошибка: {e}")
-        print("Перезапуск через 10 секунд...")
-        time.sleep(10)
-        main()
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
