@@ -573,7 +573,7 @@ async def party(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✅════════════════════════════════════✅"
         )
         
-        await update.message.reply_text(message, parse_mode='HTML())
+        await update.message.reply_text(message, parse_mode='HTML
         
     except ValueError:
         await update.message.reply_text("❌ Укажите число MMR")
@@ -1167,3 +1167,4 @@ def main():
         ("give", give),
         ("announce", announce),
         ("broadcast", bro
+
