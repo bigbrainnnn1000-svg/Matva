@@ -135,6 +135,15 @@ class Database:
         self.save_data()
         return True, item
     
+    def remove_item(self, user_id, item_index):
+        user = self.get_user(user_id)
+        if item_index >= len(user['inventory']):
+            return False, "❌ Такого предмета нет!"
+        
+        removed_item = user['inventory'].pop(item_index)
+        self.save_data()
+        return True, removed_item
+    
     def add_compensation_to_all(self, amount):
         for user_id in self.data:
             user = self.get_user(user_id)
@@ -143,6 +152,34 @@ class Database:
         return len(self.data)
 
 db = Database()
+
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+async def send_exchange_notification(context, user_id, item):
+    """Отправляет уведомление админу об обмене"""
+    user_data = db.get_user(user_id)
+    
+    # Получаем информацию о пользователе
+    user_name = f"@{user_data.get('username', '')}" if user_data.get('username') else f"ID:{user_id}"
+    display_name = user_data.get('display_name', 'Неизвестно')
+    
+    # Формируем сообщение
+    message = (
+        f"🔔 НОВЫЙ ОБМЕН ПРЕДМЕТА!\n\n"
+        f"🎁 Предмет: {item['name']}\n"
+        f"💰 Стоимость: {item['price']} коинов\n"
+        f"👤 Игрок: {user_name}\n"
+        f"📝 Имя: {display_name}\n"
+        f"🆔 ID: {user_id}\n\n"
+        f"⚠️ Не забудьте выполнить услугу!\n"
+        f"✅ После выполнения удалите предмет:\n"
+        f"/removeitem {user_id} {len(user_data['inventory'])-1}"
+    )
+    
+    try:
+        await context.bot.send_message(chat_id=ADMIN_ID, text=message)
+        print(f"📨 Уведомление об обмене отправлено админу: {user_id} -> {item['name']}")
+    except Exception as e:
+        print(f"❌ Ошибка отправки уведомления админу: {e}")
 
 # ========== КОМАНДЫ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -266,6 +303,7 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 async def party(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда поиска тимы - публикуется как объявление"""
     if not context.args:
         await update.message.reply_text("🎮 Формат: /party [ваш MMR]")
         return
@@ -274,13 +312,33 @@ async def party(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mmr = int(context.args[0])
         user = update.effective_user
         
-        await update.message.reply_text(
-            f"🎮 Поиск тимы Dota 2\n"
+        # Получаем username пользователя
+        user_data = db.get_user(user.id)
+        username = user_data.get('username', '')
+        
+        # Формируем красивое объявление
+        announcement = (
+            f"🎮 ОБЪЯВЛЕНИЕ О ПОИСКЕ ТИМЫ\n\n"
             f"👤 Игрок: {user.first_name}\n"
-            f"📊 MMR: ~{mmr}\n\n"
-            f"✅ Заявка отправлена!"
+            f"📊 MMR: ~{mmr}\n"
         )
-    except:
+        
+        if username:
+            announcement += f"📱 Контакт: @{username}\n"
+        
+        announcement += f"🆔 ID: {user.id}\n\n"
+        announcement += f"✅ Ищет тиму для игры в Dota 2!"
+        
+        # Отправляем объявление в тот же чат
+        await update.message.reply_text(announcement)
+        
+        # Также отправляем подтверждение пользователю
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=f"✅ Ваша заявка на поиск тимы опубликована!\nMMR: {mmr}"
+        )
+        
+    except ValueError:
         await update.message.reply_text("❌ Укажите число MMR")
 
 # ========== АДМИН КОМАНДЫ ==========
@@ -355,6 +413,37 @@ async def compensation(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎁 Каждому: {COMPENSATION_AMOUNT} коинов"
     )
 
+async def removeitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удаляет обменянный предмет (только для админа)"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Только для админа!")
+        return
+    
+    if len(context.args) != 2:
+        await update.message.reply_text("❌ Формат: /removeitem [user_id] [item_index]")
+        return
+    
+    try:
+        user_id = int(context.args[0])
+        item_index = int(context.args[1])
+        
+        success, item = db.remove_item(user_id, item_index)
+        
+        if success:
+            user_data = db.get_user(user_id)
+            user_name = f"@{user_data.get('username', '')}" if user_data.get('username') else f"ID:{user_id}"
+            
+            await update.message.reply_text(
+                f"✅ Предмет удален!\n"
+                f"🎁 {item['name']}\n"
+                f"👤 От игрока: {user_name}"
+            )
+        else:
+            await update.message.reply_text("❌ Не удалось удалить предмет")
+            
+    except (ValueError, IndexError):
+        await update.message.reply_text("❌ Ошибка! Проверьте ID и индекс")
+
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Только для админа!")
@@ -384,13 +473,29 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Обработка инвентаря
     if query.data.startswith("view_"):
         await query.edit_message_text("✅ Предмет уже обменян")
+    
     elif query.data.startswith("exchange_"):
         item_index = int(query.data.split("_")[1])
         user = query.from_user
         success, item = db.exchange_item(user.id, item_index)
         
         if success:
+            # Обновляем сообщение
             await query.edit_message_text(f"🔄 {item['name']} отправлен на обмен!")
+            
+            # Отправляем уведомление админу
+            await send_exchange_notification(context, user.id, item)
+            
+            # Отправляем подтверждение пользователю в ЛС
+            try:
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=f"✅ Ваш предмет '{item['name']}' отправлен на обмен!\n"
+                         f"С вами свяжется администратор для выполнения услуги."
+                )
+            except:
+                pass  # Пользователь может заблокировать бота
+            
         else:
             await query.edit_message_text("❌ Ошибка обмена")
     
@@ -436,7 +541,7 @@ def main():
     for cmd, handler in commands:
         app.add_handler(CommandHandler(cmd, handler))
     
-    # Покупка предметов (исправленная версия)
+    # Покупка предметов
     def create_buy_handler(item_id):
         async def handler(update, context):
             return await buy_item(update, context, item_id)
@@ -452,6 +557,7 @@ def main():
         ("announce", announce),
         ("broadcast", broadcast),
         ("compensation", compensation),
+        ("removeitem", removeitem),
     ]
     
     for cmd, handler in admin_commands:
@@ -473,4 +579,3 @@ if __name__ == "__main__":
         print(f"❌ Ошибка запуска: {e}")
         import traceback
         traceback.print_exc()
-
