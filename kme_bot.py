@@ -36,29 +36,12 @@ class Database:
         
         print(f"📁 База данных: {self.filename}")
         
-        # УБРАНО: НЕ создаем бэкап при запуске
+        # НИКАКИХ БЭКАПОВ!
+        
         self.data = self.load_data()
         print(f"👥 Загружено игроков: {len(self.data)}")
     
-    def create_backup(self):
-        """Только для ручного вызова через /backup_db"""
-        if os.path.exists(self.filename):
-            try:
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                backup_file = f"{self.filename}.backup_{timestamp}"
-                with open(self.filename, 'r', encoding='utf-8') as src:
-                    content = src.read()
-                    if content.strip():
-                        with open(backup_file, 'w', encoding='utf-8') as dst:
-                            dst.write(content)
-                        print(f"💾 Создана резервная копия: {backup_file}")
-                        return backup_file
-            except Exception as e:
-                print(f"⚠️ Не удалось создать бэкап: {e}")
-        return None
-    
     def load_data(self):
-        """Загрузка данных без создания новых файлов"""
         if not os.path.exists(self.filename):
             print("📝 Файл базы не найден")
             return {}
@@ -78,37 +61,32 @@ class Database:
                 return {}
             
             # Конвертируем старые данные
-            converted_count = 0
             for user_id, user_data in data.items():
                 if 'last_active' not in user_data:
                     user_data['last_active'] = datetime.now().isoformat()
-                    converted_count += 1
                 if 'admin_gifted' not in user_data:
                     user_data['admin_gifted'] = 0
-                    converted_count += 1
             
             print(f"✅ Успешно загружено {len(data)} пользователей")
             return data
             
         except json.JSONDecodeError as e:
-            print(f"❌ Ошибка JSON в файле БД: {e}")
+            print(f"❌ Ошибка JSON: {e}")
             return {}
         except Exception as e:
-            print(f"❌ Ошибка загрузки БД: {e}")
+            print(f"❌ Ошибка загрузки: {e}")
             return {}
     
     def save_data(self):
         try:
             with open(self.filename, 'w', encoding='utf-8') as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
-            print(f"💾 База сохранена: {len(self.data)} пользователей")
         except Exception as e:
-            print(f"❌ Ошибка сохранения БД: {e}")
+            print(f"❌ Ошибка сохранения: {e}")
     
     def get_user(self, user_id):
         user_id = str(user_id)
         if user_id not in self.data:
-            print(f"👤 Новый пользователь: {user_id}")
             self.data[user_id] = {
                 'coins': 0,
                 'last_farm': None,
@@ -797,6 +775,7 @@ async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await update.message.reply_text(message, parse_mode='HTML')
         except:
+            pass
         return
     
     try:
@@ -1198,7 +1177,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     print("=" * 50)
     print("🤖 KMEbot запускается...")
-    print(f"👥 Игроков: {len(db.data)}")
+    print(f"👥 Игроков в базе: {len(db.data)}")
     print(f"🎮 Уровней: {len(LEVELS)}")
     print(f"💰 Фарм: 0-4 коинов, {FARM_COOLDOWN}ч КД")
     print(f"👑 Админ ID: {ADMIN_ID}")
@@ -1244,8 +1223,8 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     
     print("✅ Бот запущен!")
-    print("📋 Бэкапы создаются ТОЛЬКО при вызове /backup_db")
-    print("📁 Основная база: kme_data.json")
+    print("⚠️ Бэкапы НЕ создаются автоматически!")
+    print("📁 Используется файл: kme_data.json")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
