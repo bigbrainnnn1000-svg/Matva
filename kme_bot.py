@@ -322,7 +322,7 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
     
-    coins = random.randint(0, 4)
+    coins = random.randint(1, 2)  # ИЗМЕНЕНО: теперь падает 1-2 коина
     new_balance = db.add_coins(user.id, coins)
     
     farm_messages = [
@@ -1179,7 +1179,7 @@ def main():
     print("🤖 KMEbot запускается...")
     print(f"👥 Игроков в базе: {len(db.data)}")
     print(f"🎮 Уровней: {len(LEVELS)}")
-    print(f"💰 Фарм: 0-4 коинов, {FARM_COOLDOWN}ч КД")
+    print(f"💰 Фарм: 1-2 коинов, {FARM_COOLDOWN}ч КД")  # ИЗМЕНЕНО: обновлено сообщение
     print(f"👑 Админ ID: {ADMIN_ID}")
     print("=" * 50)
     
